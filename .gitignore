@@ -1,0 +1,17 @@
+# PlatformIO build artifacts
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# Editor directories and files
+.vscode/
+.idea/
+*.swp
+*~
+*.bak
+*.tmp
+
+# OS generated files
+Thumbs.db
+Desktop.ini
+.DS_Store
