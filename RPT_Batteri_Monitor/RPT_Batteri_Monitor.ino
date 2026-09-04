@@ -1,7 +1,7 @@
 // =============================================================================
 // PROJEKT : RPT-Batterimonitor med Waveshare ESP32-S3-Touch-LCD-7 (Rev 1.2)
-// VERSION : v1.0.3 (Native ESP-IDF I2C Driver)
-// DATO/TID: 2026-09-04 15:35:00
+// VERSION : v1.0.4 (Pure Wire I2C - Driver_NG Fix)
+// DATO/TID: 2026-09-04 15:44:00
 // =============================================================================
 
 #include <Arduino.h>
@@ -21,7 +21,7 @@ void printStartupBanner() {
     Serial.println("   RPT BATTERY CAN-BUS PASSIVE SCANNER - PHASE 1");
     Serial.println("   Target Hardware: Waveshare ESP32-S3-Touch-LCD-7 (Rev 1.2)");
     Serial.println("   Screen: 7.0 inch IPS RGB (800x480)");
-    Serial.println("   Firmware Date  : 2026-09-04 15:35:00 (v1.0.3 Native I2C)");
+    Serial.println("   Firmware Date  : 2026-09-04 15:44:00 (v1.0.4 Wire Fix)");
     Serial.printf( "   Compile Time   : %s %s\n", __DATE__, __TIME__);
     Serial.println("================================================================================");
     Serial.printf("   CAN Controller : ESP32-S3 TWAI (TX: GPIO%d, RX: GPIO%d)\n",
@@ -94,7 +94,7 @@ void setup() {
     delay(200);
 
     Serial.println("\n\n================================================================================");
-    Serial.println(">>> ESP32-S3 RPT BATTERY MONITOR - TIMESTAMP: 2026-09-04 15:35:00 <<<");
+    Serial.println(">>> ESP32-S3 RPT BATTERY MONITOR - TIMESTAMP: 2026-09-04 15:44:00 (v1.0.4) <<<");
     printStartupBanner();
 
     // 2. Initialize UI & Board Hardware
