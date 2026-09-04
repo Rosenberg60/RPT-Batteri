@@ -26,7 +26,7 @@ SdLogger::~SdLogger() {
 }
 
 bool SdLogger::begin() {
-    Serial.println("[SD] Initializing SPI for MicroSD card...");
+    LOG_PRINTLN("[SD] Initializing SPI for MicroSD card...");
 
     // Initialize SPI bus pins for ESP32-S3-Touch-LCD-7
     SPI.begin(BOARD_SD_SCK_PIN, BOARD_SD_MISO_PIN, BOARD_SD_MOSI_PIN, -1);
@@ -37,7 +37,7 @@ bool SdLogger::begin() {
 
     // Attempt mount
     if (!SD.begin(-1, SPI, 20000000)) { // 20 MHz SPI clock
-        Serial.println("[SD] No MicroSD card detected or mount failed. Logging disabled.");
+        LOG_PRINTLN("[SD] No MicroSD card detected or mount failed. Logging disabled.");
         _mounted = false;
         UIManager::getInstance().setSdCs(false);
         return false;
@@ -45,20 +45,20 @@ bool SdLogger::begin() {
 
     uint8_t cardType = SD.cardType();
     if (cardType == CARD_NONE) {
-        Serial.println("[SD] No SD card attached. Logging disabled.");
+        LOG_PRINTLN("[SD] No SD card attached. Logging disabled.");
         _mounted = false;
         UIManager::getInstance().setSdCs(false);
         return false;
     }
 
-    Serial.print("[SD] Card detected: ");
-    if (cardType == CARD_MMC) Serial.println("MMC");
-    else if (cardType == CARD_SD) Serial.println("SDSC");
-    else if (cardType == CARD_SDHC) Serial.println("SDHC");
-    else Serial.println("UNKNOWN");
+    LOG_PRINT("[SD] Card detected: ");
+    if (cardType == CARD_MMC) LOG_PRINTLN("MMC");
+    else if (cardType == CARD_SD) LOG_PRINTLN("SDSC");
+    else if (cardType == CARD_SDHC) LOG_PRINTLN("SDHC");
+    else LOG_PRINTLN("UNKNOWN");
 
     uint64_t cardSizeMB = SD.cardSize() / (1024 * 1024);
-    Serial.printf("[SD] Card size: %llu MB\n", cardSizeMB);
+    LOG_PRINTF("[SD] Card size: %llu MB\n", cardSizeMB);
 
     _mounted = openNextLogFile();
     return _mounted;
@@ -73,10 +73,10 @@ bool SdLogger::openNextLogFile() {
         }
     }
 
-    Serial.printf("[SD] Creating new log file: %s\n", _current_filename);
+    LOG_PRINTF("[SD] Creating new log file: %s\n", _current_filename);
     _file = SD.open(_current_filename, FILE_WRITE);
     if (!_file) {
-        Serial.printf("[SD ERROR] Failed to open %s for writing!\n", _current_filename);
+        LOG_PRINTF("[SD ERROR] Failed to open %s for writing!\n", _current_filename);
         return false;
     }
 
@@ -86,7 +86,7 @@ bool SdLogger::openNextLogFile() {
     _file.flush();
     _last_flush_ms = millis();
     _logged_count = 0;
-    Serial.println("[SD] Header written successfully. CSV Logging active.");
+    LOG_PRINTLN("[SD] Header written successfully. CSV Logging active.");
     return true;
 }
 

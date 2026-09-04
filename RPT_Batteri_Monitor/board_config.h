@@ -100,10 +100,26 @@
 #define LCD_PIN_DATA14              GPIO_NUM_41 // R6
 #define LCD_PIN_DATA15              GPIO_NUM_40 // R7
 
-// Timing parameters for 800x480 RGB Panel
+// -----------------------------------------------------------------------------
+// Dual Serial Output: Ensures logs appear on BOTH:
+// 1) COM11 (Right USB-C port: CH343 UART, GPIO 43/44)
+// 2) COM5  (Left USB-C port: Native USB CDC, GPIO 19/20)
+// Regardless of Arduino IDE's "USB CDC On Boot" setting.
+// -----------------------------------------------------------------------------
+#if ARDUINO_USB_CDC_ON_BOOT
+#define LOG_PRINT(...)    do { Serial.print(__VA_ARGS__);   Serial0.print(__VA_ARGS__);   } while(0)
+#define LOG_PRINTLN(...)  do { Serial.println(__VA_ARGS__); Serial0.println(__VA_ARGS__); } while(0)
+#define LOG_PRINTF(...)   do { Serial.printf(__VA_ARGS__);  Serial0.printf(__VA_ARGS__);  } while(0)
+#else
+#define LOG_PRINT(...)    do { Serial.print(__VA_ARGS__);   } while(0)
+#define LOG_PRINTLN(...)  do { Serial.println(__VA_ARGS__); } while(0)
+#define LOG_PRINTF(...)   do { Serial.printf(__VA_ARGS__);  } while(0)
+#endif
+
+// Timing parameters for 800x480 RGB Panel (ST7262)
 #define LCD_TIMING_HPW              4
 #define LCD_TIMING_HBP              8
 #define LCD_TIMING_HFP              8
 #define LCD_TIMING_VPW              4
-#define LCD_TIMING_VBP              16
-#define LCD_TIMING_VFP              16
+#define LCD_TIMING_VBP              8
+#define LCD_TIMING_VFP              8

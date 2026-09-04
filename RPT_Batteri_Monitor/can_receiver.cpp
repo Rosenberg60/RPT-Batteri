@@ -45,16 +45,16 @@ bool CanReceiver::begin(uint32_t baudrate) {
         _frame_queue = xQueueCreate(CAN_FRAME_QUEUE_SIZE, sizeof(CanFrameRaw));
     }
 
-    Serial.printf("[CAN] Initializing TWAI on TX=GPIO%d, RX=GPIO%d (Listen-Only)...\n",
+    LOG_PRINTF("[CAN] Initializing TWAI on TX=GPIO%d, RX=GPIO%d (Listen-Only)...\n",
                   BOARD_CAN_TX_PIN, BOARD_CAN_RX_PIN);
 
     // 1. General Configuration
 #if BOARD_CAN_POINT_TO_POINT
     twai_mode_t twai_mode = TWAI_MODE_NORMAL;
-    Serial.println("[CAN] Point-to-Point mode: Hardware ACK active (prevents battery ACK errors). No software TX.");
+    LOG_PRINTLN("[CAN] Point-to-Point mode: Hardware ACK active (prevents battery ACK errors). No software TX.");
 #else
     twai_mode_t twai_mode = TWAI_MODE_LISTEN_ONLY;
-    Serial.println("[CAN] Listen-Only mode: Completely passive (no ACK).");
+    LOG_PRINTLN("[CAN] Listen-Only mode: Completely passive (no ACK).");
 #endif
 
     twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT(
@@ -80,14 +80,14 @@ bool CanReceiver::begin(uint32_t baudrate) {
     // Install TWAI driver
     esp_err_t err = twai_driver_install(&g_config, &t_config, &f_config);
     if (err != ESP_OK) {
-        Serial.printf("[CAN ERROR] twai_driver_install failed (0x%X)\n", err);
+        LOG_PRINTF("[CAN ERROR] twai_driver_install failed (0x%X)\n", err);
         return false;
     }
 
     // Start TWAI driver
     err = twai_start();
     if (err != ESP_OK) {
-        Serial.printf("[CAN ERROR] twai_start failed (0x%X)\n", err);
+        LOG_PRINTF("[CAN ERROR] twai_start failed (0x%X)\n", err);
         twai_driver_uninstall();
         return false;
     }
@@ -99,7 +99,7 @@ bool CanReceiver::begin(uint32_t baudrate) {
 
     _driver_installed = true;
     _last_rate_calc_ms = millis();
-    Serial.println("[CAN] TWAI driver successfully installed & started in LISTEN-ONLY mode.");
+    LOG_PRINTLN("[CAN] TWAI driver successfully installed & started in LISTEN-ONLY mode.");
 
     // Spawn dedicated CAN RX FreeRTOS task on Core 0
     xTaskCreatePinnedToCore(
@@ -109,7 +109,7 @@ bool CanReceiver::begin(uint32_t baudrate) {
         this,
         5,              // High priority to prevent RX queue overruns
         NULL,
-        0               // Pinned to Core 0 (leaving Core 1 for GUI and logger)
+        0               // Pinned to Core 0 (Radio/CAN core)
     );
 
     return true;
@@ -120,7 +120,7 @@ void CanReceiver::stop() {
         twai_stop();
         twai_driver_uninstall();
         _driver_installed = false;
-        Serial.println("[CAN] TWAI driver stopped.");
+        LOG_PRINTLN("[CAN] TWAI driver stopped.");
     }
 }
 
@@ -129,7 +129,7 @@ void CanReceiver::rxTaskTrampoline(void* arg) {
 }
 
 void CanReceiver::rxTask() {
-    Serial.println("[CAN] RX Task running on Core 0.");
+    LOG_PRINTLN("[CAN] RX Task running on Core 0.");
     twai_message_t rx_msg;
 
     while (_driver_installed) {
@@ -239,7 +239,7 @@ void CanReceiver::processReceivedFrame(const CanFrameRaw& frame) {
         entry.dlc = frame.dlc;
         memcpy(entry.last_data, frame.data, frame.dlc);
 
-        Serial.printf("[CAN DISCOVERY] New CAN ID: 0x%03X (%s) DLC: %d\n",
+        LOG_PRINTF("[CAN DISCOVERY] New CAN ID: 0x%03X (%s) DLC: %d\n",
                       frame.id, frame.extended ? "EXT" : "STD", frame.dlc);
     }
 

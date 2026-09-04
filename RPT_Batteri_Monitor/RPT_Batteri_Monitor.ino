@@ -1,7 +1,7 @@
 // =============================================================================
 // PROJEKT : RPT-Batterimonitor med Waveshare ESP32-S3-Touch-LCD-7 (Rev 1.2)
-// VERSION : v1.0.4 (Pure Wire I2C - Driver_NG Fix)
-// DATO/TID: 2026-09-04 15:44:00
+// VERSION : v1.0.5 (ST7262 LCD Reset & Dual Serial Output Fix)
+// DATO/TID: 2026-09-04 16:15:00
 // =============================================================================
 
 #include <Arduino.h>
@@ -15,28 +15,29 @@
 // Tracking variables for periodic serial output
 static uint32_t last_serial_stats_ms = 0;
 static uint32_t last_watchdog_ms = 0;
+static uint32_t last_heartbeat_ms = 0;
 
 void printStartupBanner() {
-    Serial.println("\n================================================================================");
-    Serial.println("   RPT BATTERY CAN-BUS PASSIVE SCANNER - PHASE 1");
-    Serial.println("   Target Hardware: Waveshare ESP32-S3-Touch-LCD-7 (Rev 1.2)");
-    Serial.println("   Screen: 7.0 inch IPS RGB (800x480)");
-    Serial.println("   Firmware Date  : 2026-09-04 15:44:00 (v1.0.4 Wire Fix)");
-    Serial.printf( "   Compile Time   : %s %s\n", __DATE__, __TIME__);
-    Serial.println("================================================================================");
-    Serial.printf("   CAN Controller : ESP32-S3 TWAI (TX: GPIO%d, RX: GPIO%d)\n",
+    LOG_PRINTLN("\n================================================================================");
+    LOG_PRINTLN("   RPT BATTERY CAN-BUS PASSIVE SCANNER - PHASE 1");
+    LOG_PRINTLN("   Target Hardware: Waveshare ESP32-S3-Touch-LCD-7 (Rev 1.2)");
+    LOG_PRINTLN("   Screen: 7.0 inch IPS RGB (800x480) - ST7262 Driver");
+    LOG_PRINTLN("   Firmware Date  : 2026-09-04 16:15:00 (v1.0.5 ST7262/Dual-Serial)");
+    LOG_PRINTF( "   Compile Time   : %s %s\n", __DATE__, __TIME__);
+    LOG_PRINTLN("================================================================================");
+    LOG_PRINTF("   CAN Controller : ESP32-S3 TWAI (TX: GPIO%d, RX: GPIO%d)\n",
                   BOARD_CAN_TX_PIN, BOARD_CAN_RX_PIN);
 #if BOARD_CAN_POINT_TO_POINT
-    Serial.println("   CAN Mode       : POINT-TO-POINT (Hardware ACK active, Zero Software TX)");
-    Serial.println("   Termination    : Jumper 13 MUST BE INSTALLED/ON (120 Ohm bus termination)");
+    LOG_PRINTLN("   CAN Mode       : POINT-TO-POINT (Hardware ACK active, Zero Software TX)");
+    LOG_PRINTLN("   Termination    : Jumper 13 MUST BE INSTALLED/ON (120 Ohm bus termination)");
 #else
-    Serial.println("   CAN Mode       : LISTEN-ONLY (Passive, No Transmit, No ACK)");
-    Serial.println("   Termination    : Jumper 13 MUST BE REMOVED/OFF (External bus already terminated)");
+    LOG_PRINTLN("   CAN Mode       : LISTEN-ONLY (Passive, No Transmit, No ACK)");
+    LOG_PRINTLN("   Termination    : Jumper 13 MUST BE REMOVED/OFF (External bus already terminated)");
 #endif
-    Serial.printf("   Baud Rate      : %d kbit/s\n", BOARD_CAN_DEFAULT_BAUDRATE / 1000);
-    Serial.println("   Multiplexer    : CH422G EXIO5 = HIGH (CAN_SEL routed to TJA1051)");
-    Serial.println("   Power Supply   : 5V DC via Type-C or 5V Header (DO NOT CONNECT 51.2V DIRECTLY!)");
-    Serial.println("================================================================================\n");
+    LOG_PRINTF("   Baud Rate      : %d kbit/s\n", BOARD_CAN_DEFAULT_BAUDRATE / 1000);
+    LOG_PRINTLN("   Multiplexer    : CH422G EXIO5 = HIGH (CAN_SEL routed to TJA1051)");
+    LOG_PRINTLN("   Serial Port    : USB-C port UART1 (CH343) at 115200 baud");
+    LOG_PRINTLN("================================================================================\n");
 }
 
 void printSerialIdStatistics() {
@@ -46,19 +47,19 @@ void printSerialIdStatistics() {
     CanIdStats stats[MAX_TRACKED_CAN_IDS];
     size_t count = CanReceiver::getInstance().getIdStatistics(stats, MAX_TRACKED_CAN_IDS);
 
-    Serial.println("\n--- [CAN SCANNER PERIODIC REPORT] ---------------------------------------------");
-    Serial.printf("Total Frames: %lu | Rate: %.1f fps | Active IDs: %u | Bus Errors: %lu | SD: %s\n",
+    LOG_PRINTLN("\n--- [CAN SCANNER PERIODIC REPORT] ---------------------------------------------");
+    LOG_PRINTF("Total Frames: %lu | Rate: %.1f fps | Active IDs: %u | Bus Errors: %lu | SD: %s\n",
                   (unsigned long)overview.total_packets,
                   overview.packets_per_sec,
                   (unsigned int)overview.active_ids_count,
                   (unsigned long)overview.bus_error_count,
                   overview.sd_card_mounted ? overview.sd_filename : "No SD card");
-    Serial.println("--------------------------------------------------------------------------------");
-    Serial.println("CAN-ID   TYPE  DLC   COUNT    INTERVAL   LAST PAYLOAD (HEX)");
-    Serial.println("--------------------------------------------------------------------------------");
+    LOG_PRINTLN("--------------------------------------------------------------------------------");
+    LOG_PRINTLN("CAN-ID   TYPE  DLC   COUNT    INTERVAL   LAST PAYLOAD (HEX)");
+    LOG_PRINTLN("--------------------------------------------------------------------------------");
 
     if (count == 0) {
-        Serial.println("  (No CAN traffic observed yet. Check wiring: RJ45 Pin 4=CAN-H, Pin 5=CAN-L)");
+        LOG_PRINTLN("  (No CAN traffic observed yet. Check wiring: RJ45 Pin 4=CAN-H, Pin 5=CAN-L)");
     } else {
         for (size_t i = 0; i < count; i++) {
             const CanIdStats& s = stats[i];
@@ -69,7 +70,7 @@ void printSerialIdStatistics() {
                 strcat(payloadStr, hex);
             }
 
-            Serial.printf("0x%03X%s  %s   %u   %6lu   %5lums    %s\n",
+            LOG_PRINTF("0x%03X%s  %s   %u   %6lu   %5lums    %s\n",
                           (unsigned int)s.id,
                           (s.id < 0x100 ? " " : ""),
                           s.extended ? "EXT" : "STD",
@@ -79,49 +80,52 @@ void printSerialIdStatistics() {
                           payloadStr);
         }
     }
-    Serial.println("--------------------------------------------------------------------------------\n");
+    LOG_PRINTLN("--------------------------------------------------------------------------------\n");
 }
 
 void setup() {
     // 1. Initialize Serial Communication for debug & data logging
     Serial.begin(115200);
+#if ARDUINO_USB_CDC_ON_BOOT
+    Serial0.begin(115200); // Hardware UART0 on GPIO 43/44 (CH343 USB-to-UART bridge)
+#endif
 
-    // For ESP32-S3 Native USB (COM5): Wait up to 3 seconds for Serial Monitor to connect
-    uint32_t startWait = millis();
-    while (!Serial && (millis() - startWait < 3000)) {
-        delay(10);
-    }
     delay(200);
 
-    Serial.println("\n\n================================================================================");
-    Serial.println(">>> ESP32-S3 RPT BATTERY MONITOR - TIMESTAMP: 2026-09-04 15:44:00 (v1.0.4) <<<");
+    LOG_PRINTLN("\n\n================================================================================");
+    LOG_PRINTLN(">>> ESP32-S3 RPT BATTERY MONITOR - TIMESTAMP: 2026-09-04 16:15:00 (v1.0.5) <<<");
     printStartupBanner();
 
     // 2. Initialize UI & Board Hardware
-    // This sets up I2C, turns on Backlight, sets CH422G EXIO5=HIGH (CAN mode)
+    // Sets up Wire on SDA=8/SCL=9, pulses LCD_RST, turns on Backlight, sets CH422G EXIO5=HIGH (CAN mode)
     // and starts the 7.0-inch 800x480 RGB display task.
-    Serial.println("[MAIN] Initializing Board Hardware, I2C, and Display...");
+    LOG_PRINTLN("[BOOT 1/4] Initializing Board Hardware, I2C, and ST7262 RGB Display...");
     if (!UIManager::getInstance().begin()) {
-        Serial.println("[MAIN WARNING] UI / Display initialization reported an issue.");
+        LOG_PRINTLN("[BOOT WARNING] UI / Display initialization reported an issue.");
+    } else {
+        LOG_PRINTLN("[BOOT OK] Display initialized successfully!");
     }
 
     // 3. Initialize MicroSD Card Logger (if card is inserted)
-    Serial.println("[MAIN] Initializing MicroSD Logger...");
+    LOG_PRINTLN("[BOOT 2/4] Initializing MicroSD Logger...");
     SdLogger::getInstance().begin();
 
     // 4. Initialize Protocol Decoder
-    Serial.println("[MAIN] Initializing Protocol Decoder...");
+    LOG_PRINTLN("[BOOT 3/4] Initializing Protocol Decoder...");
     DeyeBmsDecoder::getInstance().begin();
 
-    // 5. Initialize TWAI CAN Receiver in Listen-Only mode (500 kbit/s)
-    Serial.println("[MAIN] Initializing CAN Receiver (Listen-Only)...");
+    // 5. Initialize TWAI CAN Receiver (500 kbit/s, Point-to-Point / Hardware ACK)
+    LOG_PRINTLN("[BOOT 4/4] Initializing CAN Receiver (Point-to-Point, 500 kbps)...");
     if (!CanReceiver::getInstance().begin(BOARD_CAN_DEFAULT_BAUDRATE)) {
-        Serial.println("[MAIN FATAL] Failed to start CAN Receiver! Check pins and TWAI driver.");
+        LOG_PRINTLN("[BOOT FATAL] Failed to start CAN Receiver! Check pins and TWAI driver.");
+    } else {
+        LOG_PRINTLN("[BOOT OK] CAN Receiver listening!");
     }
 
-    Serial.println("[MAIN] Setup complete. System listening on CAN bus.");
+    LOG_PRINTLN("\n[SYSTEM READY] All subsystems started. Listening for RPT battery CAN frames.\n");
     last_serial_stats_ms = millis();
     last_watchdog_ms = millis();
+    last_heartbeat_ms = millis();
 }
 
 void loop() {
@@ -146,7 +150,7 @@ void loop() {
         ScannerOverview overview;
         CanReceiver::getInstance().getOverview(overview);
 
-        Serial.printf("[%7lums] ID: 0x%03X (%s) DLC: %d Data: %-24s [Total: %lu]\n",
+        LOG_PRINTF("[%7lums] ID: 0x%03X (%s) DLC: %d Data: %-24s [Total: %lu]\n",
                       (unsigned long)frame.timestamp_ms,
                       (unsigned int)frame.id,
                       frame.extended ? "EXT" : "STD",
@@ -157,8 +161,20 @@ void loop() {
 
     uint32_t now = millis();
 
-    // Periodic statistics report to Serial every 3 seconds
-    if (now - last_serial_stats_ms >= 3000) {
+    // Heartbeat every 2 seconds to prove board is alive on Serial Monitor
+    if (now - last_heartbeat_ms >= 2000) {
+        ScannerOverview ov;
+        CanReceiver::getInstance().getOverview(ov);
+        LOG_PRINTF("[HEARTBEAT %lus] Total Frames: %lu | Rate: %.1ffps | Errors: %lu\n",
+                   (unsigned long)(now / 1000),
+                   (unsigned long)ov.total_packets,
+                   ov.packets_per_sec,
+                   (unsigned long)ov.bus_error_count);
+        last_heartbeat_ms = now;
+    }
+
+    // Periodic statistics report to Serial every 5 seconds
+    if (now - last_serial_stats_ms >= 5000) {
         printSerialIdStatistics();
         last_serial_stats_ms = now;
     }

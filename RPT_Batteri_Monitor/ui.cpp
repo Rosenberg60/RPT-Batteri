@@ -149,7 +149,7 @@ bool UIManager::writeCh422gReg(uint8_t reg_addr, uint8_t value) {
     Wire.write(value);
     uint8_t err = Wire.endTransmission();
     if (err != 0) {
-        Serial.printf("[UI WARNING] CH422G write to 0x%02X failed (code: %d)\n", reg_addr, err);
+        LOG_PRINTF("[UI WARNING] CH422G write to 0x%02X failed (code: %d)\n", reg_addr, err);
         return false;
     }
     return true;
@@ -179,7 +179,7 @@ void UIManager::setSdCs(bool active) {
 }
 
 bool UIManager::begin() {
-    Serial.println("[UI] Initializing Wire on SDA=GPIO8, SCL=GPIO9 (100 kHz)...");
+    LOG_PRINTLN("[UI] Initializing Wire on SDA=GPIO8, SCL=GPIO9 (100 kHz)...");
 
     // 1. Initialize Wire bus at 100 kHz with 50ms timeout
     Wire.begin(BOARD_I2C_SDA_PIN, BOARD_I2C_SCL_PIN, BOARD_I2C_FREQ_HZ);
@@ -188,43 +188,53 @@ bool UIManager::begin() {
 
     // 2. Configure CH422G:
     // Write WR_SET (0x24): 0x01 enables general output mode (IO_OE = 1)
-    Serial.println("[UI] Configuring CH422G WR_SET (0x24)...");
+    LOG_PRINTLN("[UI] Configuring CH422G WR_SET (0x24)...");
     writeCh422gReg(CH422G_I2C_ADDR_WR_SET, 0x01);
     delay(10);
 
-    // Default pin outputs on 7" Waveshare:
+    // Hardware reset sequence for Waveshare 7.0" LCD (ST7262):
     // EXIO1 (Touch RST) = 1 (active)
     // EXIO2 (LCD BL)    = 1 (Backlight ON)
-    // EXIO3 (LCD RST)   = 1 (Not in reset)
+    // EXIO3 (LCD RST)   = 0 (HOLD in reset!)
     // EXIO4 (SD CS)     = 1 (CS idle, active low)
     // EXIO5 (CAN_SEL)   = 1 (CRITICAL: HIGH = CAN mode for onboard TJA1051)
-    Serial.println("[UI] Configuring CH422G WR_IO (0x38)...");
+    LOG_PRINTLN("[UI] Holding ST7262 LCD in hardware reset (EXIO3=0)...");
     _ch422g_out_mask = CH422G_EXIO1_TP_RST |
                        CH422G_EXIO2_LCD_BL  |
-                       CH422G_EXIO3_LCD_RST |
                        CH422G_EXIO4_SD_CS   |
                        CH422G_EXIO5_CAN_SEL;
     updateCh422gOutput();
-    Serial.println("[UI] CH422G configured: CAN_SEL=HIGH, Backlight=ON.");
+    delay(20);
+
+    // Release ST7262 LCD reset and allow power stabilization
+    LOG_PRINTLN("[UI] Releasing ST7262 LCD reset (EXIO3=1)...");
+    _ch422g_out_mask |= CH422G_EXIO3_LCD_RST;
+    updateCh422gOutput();
+    delay(120); // ST7262 required power-on stabilization delay
+
+    LOG_PRINTLN("[UI] CH422G configured: CAN_SEL=HIGH, Backlight=ON, LCD_RST=RELEASED.");
 
     // 3. Allocate RGB565 Framebuffer in PSRAM (800 * 480 * 2 = 768,000 bytes)
-    Serial.println("[UI] Allocating 800x480 RGB framebuffer in PSRAM...");
+    LOG_PRINTLN("[UI] Allocating 800x480 RGB framebuffer in PSRAM...");
     _framebuffer = (uint16_t*)heap_caps_malloc(LCD_WIDTH * LCD_HEIGHT * sizeof(uint16_t),
                                               MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!_framebuffer) {
-        Serial.println("[UI] PSRAM allocation failed, attempting default memory allocation...");
+        LOG_PRINTLN("[UI] PSRAM allocation failed, attempting default memory allocation...");
         _framebuffer = (uint16_t*)heap_caps_malloc(LCD_WIDTH * LCD_HEIGHT * sizeof(uint16_t),
                                                   MALLOC_CAP_DEFAULT);
     }
 
     if (!_framebuffer) {
-        Serial.println("[UI ERROR] Failed to allocate framebuffer memory!");
+        LOG_PRINTLN("[UI ERROR] Failed to allocate framebuffer memory!");
         return false;
     }
-    Serial.printf("[UI] Framebuffer ready at %p (%d KB)\n", _framebuffer, (LCD_WIDTH * LCD_HEIGHT * 2) / 1024);
+    LOG_PRINTF("[UI] Framebuffer ready at %p (%d KB)\n", _framebuffer, (LCD_WIDTH * LCD_HEIGHT * 2) / 1024);
+
+    // Clear initial framebuffer
+    fillScreen(COLOR_BLACK);
 
     // 4. Initialize 7.0-inch 800x480 RGB LCD Panel via ESP-IDF esp_lcd
-    Serial.println("[UI] Initializing 7.0-inch 800x480 RGB LCD Driver...");
+    LOG_PRINTLN("[UI] Initializing 7.0-inch 800x480 RGB LCD Driver (ST7262)...");
     esp_lcd_rgb_panel_config_t panel_conf = {};
     panel_conf.clk_src = LCD_CLK_SRC_PLL160M;
     panel_conf.timings.pclk_hz = LCD_PIXEL_CLOCK_HZ;
@@ -236,7 +246,12 @@ bool UIManager::begin() {
     panel_conf.timings.vsync_pulse_width = LCD_TIMING_VPW;
     panel_conf.timings.vsync_back_porch = LCD_TIMING_VBP;
     panel_conf.timings.vsync_front_porch = LCD_TIMING_VFP;
+    panel_conf.timings.flags.pclk_active_neg = 1; // ST7262 clock latch polarity
     panel_conf.data_width = 16;
+#if defined(ESP_IDF_VERSION) && (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 2, 0))
+    panel_conf.num_fbs = 1;
+    panel_conf.bounce_buffer_size_px = LCD_WIDTH * 10; // 8000 px SRAM bounce buffer avoids PSRAM DMA starvation
+#endif
     panel_conf.sram_trans_align = 4;
     panel_conf.psram_trans_align = 64;
     panel_conf.hsync_gpio_num = LCD_PIN_HSYNC;
@@ -265,14 +280,15 @@ bool UIManager::begin() {
 
     esp_err_t err = esp_lcd_new_rgb_panel(&panel_conf, &_panel_handle);
     if (err != ESP_OK) {
-        Serial.printf("[UI ERROR] esp_lcd_new_rgb_panel failed: 0x%X\n", err);
+        LOG_PRINTF("[UI ERROR] esp_lcd_new_rgb_panel failed: 0x%X\n", err);
         return false;
     }
 
     esp_lcd_panel_reset(_panel_handle);
     esp_lcd_panel_init(_panel_handle);
+    esp_lcd_panel_disp_on_off(_panel_handle, true);
 
-    // Initial clear & test render
+    // Initial clear & render test screen
     fillScreen(COLOR_BLACK);
     esp_lcd_panel_draw_bitmap(_panel_handle, 0, 0, LCD_WIDTH, LCD_HEIGHT, _framebuffer);
 
@@ -289,6 +305,7 @@ bool UIManager::begin() {
         1               // Pinned to Core 1
     );
 
+    LOG_PRINTLN("[UI] Display task successfully started!");
     return true;
 }
 
@@ -297,7 +314,7 @@ void UIManager::uiTaskTrampoline(void* arg) {
 }
 
 void UIManager::uiTask() {
-    Serial.println("[UI] Task running on Core 1.");
+    LOG_PRINTLN("[UI] Task running on Core 1.");
     while (_initialized) {
         updateDisplay();
         vTaskDelay(pdMS_TO_TICKS(100)); // 10 Hz refresh
