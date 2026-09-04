@@ -22,6 +22,9 @@ public:
     // Set SD Card Chip Select state
     void setSdCs(bool active);
 
+    // Set CAN mode (CH422G EXIO5: HIGH = CAN, LOW = USB)
+    void setCanMode(bool enable);
+
     // Get frame buffer pointer (if needed)
     uint16_t* getFrameBuffer() const { return _framebuffer; }
 

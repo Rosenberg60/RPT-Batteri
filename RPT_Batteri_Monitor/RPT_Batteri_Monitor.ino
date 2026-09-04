@@ -115,7 +115,9 @@ void setup() {
     DeyeBmsDecoder::getInstance().begin();
 
     // 5. Initialize TWAI CAN Receiver (500 kbit/s, Point-to-Point / Hardware ACK)
-    LOG_PRINTLN("[BOOT 4/4] Initializing CAN Receiver (Point-to-Point, 500 kbps)...");
+    LOG_PRINTLN("[BOOT 4/4] Activating CAN Mode (CH422G EXIO5 = HIGH) & TWAI Receiver...");
+    UIManager::getInstance().setCanMode(true);
+    delay(50);
     if (!CanReceiver::getInstance().begin(BOARD_CAN_DEFAULT_BAUDRATE)) {
         LOG_PRINTLN("[BOOT FATAL] Failed to start CAN Receiver! Check pins and TWAI driver.");
     } else {

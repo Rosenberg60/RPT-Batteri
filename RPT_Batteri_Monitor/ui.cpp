@@ -178,6 +178,17 @@ void UIManager::setSdCs(bool active) {
     updateCh422gOutput();
 }
 
+void UIManager::setCanMode(bool enable) {
+    if (enable) {
+        _ch422g_out_mask |= CH422G_EXIO5_CAN_SEL;
+        LOG_PRINTLN("[UI] CH422G EXIO5 set HIGH: CAN Mode active (TJA1051 transceiver connected).");
+    } else {
+        _ch422g_out_mask &= ~CH422G_EXIO5_CAN_SEL;
+        LOG_PRINTLN("[UI] CH422G EXIO5 set LOW: USB Mode active (Native USB connected).");
+    }
+    updateCh422gOutput();
+}
+
 bool UIManager::begin() {
     LOG_PRINTLN("[UI] Initializing Wire on SDA=GPIO8, SCL=GPIO9 (100 kHz)...");
 
@@ -197,12 +208,11 @@ bool UIManager::begin() {
     // EXIO2 (LCD BL)    = 1 (Backlight ON)
     // EXIO3 (LCD RST)   = 0 (HOLD in reset!)
     // EXIO4 (SD CS)     = 1 (CS idle, active low)
-    // EXIO5 (CAN_SEL)   = 1 (CRITICAL: HIGH = CAN mode for onboard TJA1051)
+    // Note: EXIO5 (CAN_SEL) kept LOW (0) so USB is NOT severed prematurely.
     LOG_PRINTLN("[UI] Holding ST7262 LCD in hardware reset (EXIO3=0)...");
     _ch422g_out_mask = CH422G_EXIO1_TP_RST |
                        CH422G_EXIO2_LCD_BL  |
-                       CH422G_EXIO4_SD_CS   |
-                       CH422G_EXIO5_CAN_SEL;
+                       CH422G_EXIO4_SD_CS;
     updateCh422gOutput();
     delay(20);
 
@@ -212,7 +222,7 @@ bool UIManager::begin() {
     updateCh422gOutput();
     delay(120); // ST7262 required power-on stabilization delay
 
-    LOG_PRINTLN("[UI] CH422G configured: CAN_SEL=HIGH, Backlight=ON, LCD_RST=RELEASED.");
+    LOG_PRINTLN("[UI] CH422G configured: Backlight=ON, LCD_RST=RELEASED.");
 
     // 3. Allocate RGB565 Framebuffer in PSRAM (800 * 480 * 2 = 768,000 bytes)
     LOG_PRINTLN("[UI] Allocating 800x480 RGB framebuffer in PSRAM...");
