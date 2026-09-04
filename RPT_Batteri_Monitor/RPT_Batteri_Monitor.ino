@@ -77,7 +77,16 @@ void printSerialIdStatistics() {
 void setup() {
     // 1. Initialize Serial Communication for debug & data logging
     Serial.begin(115200);
-    delay(500);
+
+    // For ESP32-S3 Native USB (COM5): Wait up to 3 seconds for Serial Monitor to connect
+    uint32_t startWait = millis();
+    while (!Serial && (millis() - startWait < 3000)) {
+        delay(10);
+    }
+    delay(200);
+
+    Serial.println("\n\n================================================================================");
+    Serial.println(">>> ESP32-S3 RPT BATTERY MONITOR BOOTED SUCCESSFULLY! <<<");
     printStartupBanner();
 
     // 2. Initialize UI & Board Hardware
