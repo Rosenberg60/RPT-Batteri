@@ -109,19 +109,18 @@ Da batteriet sender som eneste anden node på linjen, kræver CAN-standarden (IS
 Projektet er fuldt opbygget i `c:\MIRO Github repos\RPT Batteri\`:
 
 ```text
-├── platformio.ini              # ESP32-S3 miljø (16MB Flash, 8MB OPI PSRAM)
-├── include/
+├── platformio.ini              # PlatformIO konfiguration (bygger direkte fra sketch-mappen)
+├── RPT_Batteri_Monitor/        # [Arduino Sketch Mappe] - Åbnes direkte i Arduino IDE
+│   ├── RPT_Batteri_Monitor.ino # Hoved-sketch (setup & loop)
 │   ├── board_config.h          # Hardwarepins, I2C, SPI, CAN (TX=20, RX=19), CH422G
 │   ├── battery_data.h          # Datastrukturer for CAN-rammer, ID-statistik og batteridata
-│   ├── can_receiver.h          # TWAI driver, ringbuffer, thread-safe statistik
-│   ├── sd_logger.h             # MicroSD-logning til nummererede CSV-filer
-│   ├── ui.h                    # 7" 800x480 RGB display dashboard og fontmotor
-│   └── deye_bms_decoder.h      # Forberedt dekoder-klasse til Fase 2
-├── src/
-│   ├── main.cpp                # Setup, FreeRTOS task-orkestrering, seriel udlæsning
+│   ├── can_receiver.h          # TWAI driver header
 │   ├── can_receiver.cpp        # Alert-drevet CAN-modtagelse uden malloc i modtagestien
+│   ├── sd_logger.h             # MicroSD logger header
 │   ├── sd_logger.cpp           # CSV-skrivning med periodisk flush (1 sek / 50 pakker)
+│   ├── ui.h                    # UI & display header
 │   ├── ui.cpp                  # 800x480 PSRAM-framebuffer rendering (10 Hz)
+│   ├── deye_bms_decoder.h      # BMS dekoder header
 │   └── deye_bms_decoder.cpp    # Stub til senere implementering af Deye/RPT-protokol
 └── docs/
     ├── ESP32-S3-Touch-LCD-7-Sch.pdf   # Komplet fabriks-skematik fra Waveshare
@@ -166,16 +165,18 @@ timestamp_ms,can_id,extended,dlc,data0,data1,data2,data3,data4,data5,data6,data7
    ```
 
 ### Mulighed B: Arduino IDE
-1. Installer ESP32 board-pakken (v2.0.x eller v3.x).
-2. Vælg board: **ESP32S3 Dev Module**.
-3. Under **Tools**:
+1. Åbn filen: **`RPT_Batteri_Monitor/RPT_Batteri_Monitor.ino`** i Arduino IDE (File -> Open).
+   * *Arduino IDE åbner automatisk alle projektets .h og .cpp filer som faner i toppen.*
+2. Vælg board i Arduino IDE: **ESP32S3 Dev Module**.
+3. Under menuen **Tools** sættes følgende parametre:
    * **Flash Size**: `16MB (128Mb)`
    * **Partition Scheme**: `16M Flash (3MB APP/9.9MB FATFS)` eller `Default 16MB`
    * **PSRAM**: `OPI PSRAM`
    * **CPU Frequency**: `240MHz`
    * **Upload Speed**: `921600`
-   * **Port**: Vælg USB-TO-UART porten (CH343).
-4. Klik **Upload**.
+   * **USB CDC On Boot**: `Disabled` (eller `Enabled`)
+   * **Port**: Vælg COM-porten for USB-TO-UART forbindelsen (CH343 på UART1-porten).
+4. Klik på **Upload** (pil-knappen).
 
 ---
 
