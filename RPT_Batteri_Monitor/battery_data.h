@@ -41,6 +41,9 @@ struct ScannerOverview {
     bool sd_card_mounted;
     char sd_filename[32];
     uint32_t last_packet_time_ms;
+    uint32_t rx_error_counter;
+    uint32_t tx_error_counter;
+    uint8_t twai_state; // 0=STOPPED, 1=RUNNING, 2=BUS_OFF, 3=RECOVERING
 };
 
 // Battery data model as specified for Phase 2 & 3

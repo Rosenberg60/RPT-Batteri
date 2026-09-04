@@ -19,6 +19,9 @@ CanReceiver::CanReceiver()
       _total_packets(0),
       _bus_error_count(0),
       _rx_missed_count(0),
+      _rx_error_counter(0),
+      _tx_error_counter(0),
+      _twai_state(1),
       _last_packet_time_ms(0),
       _last_rate_calc_ms(0),
       _packets_since_last_calc(0),
@@ -45,7 +48,7 @@ bool CanReceiver::begin(uint32_t baudrate) {
         _frame_queue = xQueueCreate(CAN_FRAME_QUEUE_SIZE, sizeof(CanFrameRaw));
     }
 
-    LOG_PRINTF("[CAN] Initializing TWAI on TX=GPIO%d, RX=GPIO%d (Listen-Only)...\n",
+    LOG_PRINTF("[CAN] Initializing TWAI on TX=GPIO%d, RX=GPIO%d...\n",
                   BOARD_CAN_TX_PIN, BOARD_CAN_RX_PIN);
 
     // 1. General Configuration
@@ -92,14 +95,9 @@ bool CanReceiver::begin(uint32_t baudrate) {
         return false;
     }
 
-    // Reconfigure alerts to detect incoming data and bus errors
-    uint32_t alerts = TWAI_ALERT_RX_DATA | TWAI_ALERT_ERR_PASS |
-                      TWAI_ALERT_BUS_ERROR | TWAI_ALERT_RX_QUEUE_FULL;
-    twai_reconfigure_alerts(alerts, NULL);
-
     _driver_installed = true;
     _last_rate_calc_ms = millis();
-    LOG_PRINTLN("[CAN] TWAI driver successfully installed & started in LISTEN-ONLY mode.");
+    LOG_PRINTLN("[CAN] TWAI driver successfully installed & started.");
 
     // Spawn dedicated CAN RX FreeRTOS task on Core 0
     xTaskCreatePinnedToCore(
@@ -133,46 +131,45 @@ void CanReceiver::rxTask() {
     twai_message_t rx_msg;
 
     while (_driver_installed) {
-        uint32_t alerts_triggered = 0;
-        // Wait up to 50ms for TWAI alerts (alert-driven, low CPU load)
-        if (twai_read_alerts(&alerts_triggered, pdMS_TO_TICKS(50)) == ESP_OK) {
-            twai_status_info_t status;
-            twai_get_status_info(&status);
+        // Direct receive: wait up to 20ms for incoming CAN frame
+        esp_err_t ret = twai_receive(&rx_msg, pdMS_TO_TICKS(20));
+        if (ret == ESP_OK) {
+            CanFrameRaw frame;
+            frame.timestamp_ms = millis();
+            frame.id = rx_msg.identifier;
+            frame.extended = rx_msg.extd;
+            frame.rtr = rx_msg.rtr;
+            frame.dlc = rx_msg.data_length_code;
+            if (frame.dlc > 8) frame.dlc = 8;
+            memcpy(frame.data, rx_msg.data, frame.dlc);
 
-            if (alerts_triggered & TWAI_ALERT_BUS_ERROR) {
-                if (xSemaphoreTake(_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
-                    _bus_error_count = status.bus_error_count;
-                    xSemaphoreGive(_mutex);
-                }
+            // Update statistics and live queues
+            processReceivedFrame(frame);
+
+            // Dispatch to consumer queue (SD logger, non-blocking)
+            if (_frame_queue) {
+                xQueueSend(_frame_queue, &frame, 0);
+            }
+        }
+
+        // Query driver hardware status and auto-recover if bus-off
+        twai_status_info_t status;
+        if (twai_get_status_info(&status) == ESP_OK) {
+            if (xSemaphoreTake(_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+                _bus_error_count = status.bus_error_count;
+                _rx_missed_count = status.rx_missed_count;
+                _rx_error_counter = status.rx_error_counter;
+                _tx_error_counter = status.tx_error_counter;
+                _twai_state = status.state;
+                xSemaphoreGive(_mutex);
             }
 
-            if (alerts_triggered & TWAI_ALERT_RX_QUEUE_FULL) {
-                if (xSemaphoreTake(_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
-                    _rx_missed_count = status.rx_missed_count;
-                    xSemaphoreGive(_mutex);
-                }
-            }
-
-            // Drain all available messages from TWAI hardware queue
-            if (alerts_triggered & TWAI_ALERT_RX_DATA) {
-                while (twai_receive(&rx_msg, 0) == ESP_OK) {
-                    CanFrameRaw frame;
-                    frame.timestamp_ms = millis();
-                    frame.id = rx_msg.identifier;
-                    frame.extended = rx_msg.extd;
-                    frame.rtr = rx_msg.rtr;
-                    frame.dlc = rx_msg.data_length_code;
-                    if (frame.dlc > 8) frame.dlc = 8;
-                    memcpy(frame.data, rx_msg.data, frame.dlc);
-
-                    // Update statistics and live queues
-                    processReceivedFrame(frame);
-
-                    // Dispatch to consumer queue (SD logger, non-blocking)
-                    if (_frame_queue) {
-                        xQueueSend(_frame_queue, &frame, 0);
-                    }
-                }
+            // Auto-recovery if bus went OFF (e.g. from connecting cable while live)
+            if (status.state == TWAI_STATE_BUS_OFF) {
+                LOG_PRINTLN("[CAN WARNING] Bus-off state detected! Initiating recovery...");
+                twai_initiate_recovery();
+            } else if (status.state == TWAI_STATE_STOPPED) {
+                twai_start();
             }
         }
 
@@ -258,6 +255,9 @@ void CanReceiver::getOverview(ScannerOverview& out_overview) {
         out_overview.packets_per_sec = _current_rate_fps;
         out_overview.bus_error_count = _bus_error_count;
         out_overview.rx_missed_count = _rx_missed_count;
+        out_overview.rx_error_counter = _rx_error_counter;
+        out_overview.tx_error_counter = _tx_error_counter;
+        out_overview.twai_state = _twai_state;
         out_overview.active_ids_count = _id_count;
         out_overview.can_listening = _driver_installed;
         out_overview.last_packet_time_ms = _last_packet_time_ms;

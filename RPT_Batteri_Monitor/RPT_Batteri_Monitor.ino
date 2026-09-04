@@ -163,15 +163,22 @@ void loop() {
 
     uint32_t now = millis();
 
-    // Heartbeat every 2 seconds to prove board is alive on Serial Monitor
+    // Heartbeat every 2 seconds to prove board is alive and report physical bus state
     if (now - last_heartbeat_ms >= 2000) {
         ScannerOverview ov;
         CanReceiver::getInstance().getOverview(ov);
-        LOG_PRINTF("[HEARTBEAT %lus] Total Frames: %lu | Rate: %.1ffps | Errors: %lu\n",
+        const char* stateStr = "RUNNING";
+        if (ov.twai_state == 0) stateStr = "STOPPED";
+        else if (ov.twai_state == 2) stateStr = "BUS_OFF";
+        else if (ov.twai_state == 3) stateStr = "RECOVERING";
+
+        LOG_PRINTF("[HEARTBEAT %lus] State: %s | Frames: %lu | Bus Errors: %lu | REC: %lu | TEC: %lu\n",
                    (unsigned long)(now / 1000),
+                   stateStr,
                    (unsigned long)ov.total_packets,
-                   ov.packets_per_sec,
-                   (unsigned long)ov.bus_error_count);
+                   (unsigned long)ov.bus_error_count,
+                   (unsigned long)ov.rx_error_counter,
+                   (unsigned long)ov.tx_error_counter);
         last_heartbeat_ms = now;
     }
 

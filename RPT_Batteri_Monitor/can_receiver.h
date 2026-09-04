@@ -69,6 +69,9 @@ private:
     uint32_t _total_packets;
     uint32_t _bus_error_count;
     uint32_t _rx_missed_count;
+    uint32_t _rx_error_counter;
+    uint32_t _tx_error_counter;
+    uint8_t _twai_state;
     uint32_t _last_packet_time_ms;
     uint32_t _last_rate_calc_ms;
     uint32_t _packets_since_last_calc;
