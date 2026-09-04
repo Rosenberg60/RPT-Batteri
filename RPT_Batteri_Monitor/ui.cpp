@@ -144,10 +144,15 @@ UIManager::UIManager()
 UIManager::~UIManager() {
 }
 
-void UIManager::writeCh422gReg(uint8_t reg_addr, uint8_t value) {
+bool UIManager::writeCh422gReg(uint8_t reg_addr, uint8_t value) {
     Wire.beginTransmission(reg_addr);
     Wire.write(value);
-    Wire.endTransmission();
+    uint8_t err = Wire.endTransmission(true);
+    if (err != 0) {
+        Serial.printf("[UI WARNING] I2C write to CH422G 0x%02X failed (error code: %d)\n", reg_addr, err);
+        return false;
+    }
+    return true;
 }
 
 void UIManager::updateCh422gOutput() {
@@ -174,15 +179,18 @@ void UIManager::setSdCs(bool active) {
 }
 
 bool UIManager::begin() {
-    Serial.println("[UI] Initializing I2C bus & CH422G I/O Expander...");
+    Serial.println("[UI] Initializing I2C bus on SDA=GPIO8, SCL=GPIO9 (100 kHz)...");
 
-    // 1. Initialize I2C bus on GPIO8 (SDA) and GPIO9 (SCL)
+    // 1. Initialize I2C bus on GPIO8 (SDA) and GPIO9 (SCL) at 100 kHz with 50ms timeout
     Wire.begin(BOARD_I2C_SDA_PIN, BOARD_I2C_SCL_PIN, BOARD_I2C_FREQ_HZ);
+    Wire.setTimeOut(50);
     delay(50);
 
     // 2. Configure CH422G:
     // Write WR_SET (0x24): 0x01 enables general output mode (IO_OE = 1)
+    Serial.println("[UI] Configuring CH422G WR_SET (0x24)...");
     writeCh422gReg(CH422G_I2C_ADDR_WR_SET, 0x01);
+    delay(10);
 
     // Default pin outputs on 7" Waveshare:
     // EXIO1 (Touch RST) = 1 (active)
@@ -190,6 +198,7 @@ bool UIManager::begin() {
     // EXIO3 (LCD RST)   = 1 (Not in reset)
     // EXIO4 (SD CS)     = 1 (CS idle, active low)
     // EXIO5 (CAN_SEL)   = 1 (CRITICAL: HIGH = CAN mode for onboard TJA1051)
+    Serial.println("[UI] Configuring CH422G WR_IO (0x38)...");
     _ch422g_out_mask = CH422G_EXIO1_TP_RST |
                        CH422G_EXIO2_LCD_BL  |
                        CH422G_EXIO3_LCD_RST |

@@ -30,7 +30,7 @@ private:
     ~UIManager();
 
     // Low-level CH422G I2C write
-    void writeCh422gReg(uint8_t reg_addr, uint8_t value);
+    bool writeCh422gReg(uint8_t reg_addr, uint8_t value);
     void updateCh422gOutput();
 
     // Drawing primitives for RGB565 framebuffer

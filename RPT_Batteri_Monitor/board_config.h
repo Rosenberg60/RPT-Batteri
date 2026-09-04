@@ -31,7 +31,7 @@
 // -----------------------------------------------------------------------------
 #define BOARD_I2C_SDA_PIN           GPIO_NUM_8
 #define BOARD_I2C_SCL_PIN           GPIO_NUM_9
-#define BOARD_I2C_FREQ_HZ           400000      // 400 kHz Fast-Mode
+#define BOARD_I2C_FREQ_HZ           100000      // 100 kHz Standard-Mode (Required for CH422G)
 
 // CH422G I2C 7-bit Addresses:
 // 0x48 >> 1 = 0x24 (WR-SET: system parameter register)
