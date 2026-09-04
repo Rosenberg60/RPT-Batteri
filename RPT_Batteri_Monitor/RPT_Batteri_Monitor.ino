@@ -86,7 +86,7 @@ void setup() {
     delay(200);
 
     Serial.println("\n\n================================================================================");
-    Serial.println(">>> ESP32-S3 RPT BATTERY MONITOR BOOTED SUCCESSFULLY! <<<");
+    Serial.println(">>> ESP32-S3 RPT BATTERY MONITOR - BUILD v1.0.3 (NATIVE I2C) <<<");
     printStartupBanner();
 
     // 2. Initialize UI & Board Hardware

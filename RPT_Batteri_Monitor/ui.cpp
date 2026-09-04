@@ -2,6 +2,7 @@
 #include "can_receiver.h"
 #include "sd_logger.h"
 #include <Wire.h>
+#include "driver/i2c.h"
 #include "esp_lcd_panel_rgb.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_vendor.h"
@@ -144,12 +145,12 @@ UIManager::UIManager()
 UIManager::~UIManager() {
 }
 
+#define UI_I2C_PORT I2C_NUM_0
+
 bool UIManager::writeCh422gReg(uint8_t reg_addr, uint8_t value) {
-    Wire.beginTransmission(reg_addr);
-    Wire.write(value);
-    uint8_t err = Wire.endTransmission(true);
-    if (err != 0) {
-        Serial.printf("[UI WARNING] I2C write to CH422G 0x%02X failed (error code: %d)\n", reg_addr, err);
+    esp_err_t err = i2c_master_write_to_device(UI_I2C_PORT, reg_addr, &value, 1, pdMS_TO_TICKS(50));
+    if (err != ESP_OK) {
+        Serial.printf("[UI WARNING] CH422G write to 0x%02X failed (err: 0x%X)\n", reg_addr, err);
         return false;
     }
     return true;
@@ -179,12 +180,19 @@ void UIManager::setSdCs(bool active) {
 }
 
 bool UIManager::begin() {
-    Serial.println("[UI] Initializing I2C bus on SDA=GPIO8, SCL=GPIO9 (100 kHz)...");
+    Serial.println("[UI] Initializing native I2C driver on SDA=GPIO8, SCL=GPIO9 (100 kHz)...");
 
-    // 1. Initialize I2C bus on GPIO8 (SDA) and GPIO9 (SCL) at 100 kHz with 50ms timeout
-    Wire.begin(BOARD_I2C_SDA_PIN, BOARD_I2C_SCL_PIN, BOARD_I2C_FREQ_HZ);
-    Wire.setTimeOut(50);
-    delay(50);
+    // 1. Initialize native ESP-IDF I2C master driver with internal pullups
+    i2c_config_t i2c_conf = {};
+    i2c_conf.mode = I2C_MODE_MASTER;
+    i2c_conf.sda_io_num = (gpio_num_t)BOARD_I2C_SDA_PIN;
+    i2c_conf.scl_io_num = (gpio_num_t)BOARD_I2C_SCL_PIN;
+    i2c_conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
+    i2c_conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
+    i2c_conf.master.clk_speed = BOARD_I2C_FREQ_HZ;
+    i2c_param_config(UI_I2C_PORT, &i2c_conf);
+    i2c_driver_install(UI_I2C_PORT, i2c_conf.mode, 0, 0, 0);
+    delay(20);
 
     // 2. Configure CH422G:
     // Write WR_SET (0x24): 0x01 enables general output mode (IO_OE = 1)
