@@ -69,6 +69,12 @@ struct BatteryData {
     float minCellTemp_C;
     float maxCellTemp_C;
     float cellVoltages[16];
+    float pack1_cellVoltages[16]; // Battery 1: Rosen Master (16 cells)
+    float pack2_cellVoltages[16]; // Battery 2: RPT Slave (16 cells)
+    float pack1_minV;
+    float pack1_maxV;
+    float pack2_minV;
+    float pack2_maxV;
     bool  individualCellsKnown;
 
     char manufacturer[16];

@@ -502,7 +502,7 @@ void UIManager::drawDashboard(const BatteryData& bData, const ScannerOverview& o
     fillRect(0, 0, LCD_WIDTH, 44, COLOR_NAVY);
     drawFastHLine(0, 44, LCD_WIDTH, COLOR_CYAN);
     drawString(15, 6, "BATTERY STORAGE DASHBOARD", COLOR_WHITE, COLOR_NAVY, 2);
-    drawString(345, 8, "Deye & Rosen / RPT Bank", COLOR_CYAN, COLOR_NAVY, 1);
+    drawString(345, 8, "Rosen (200Ah) + RPT (300Ah)", COLOR_CYAN, COLOR_NAVY, 1);
 
     uint32_t upSec = millis() / 1000;
     char upBuf[48];
@@ -520,22 +520,22 @@ void UIManager::drawDashboard(const BatteryData& bData, const ScannerOverview& o
     if (bData.communicationOK) {
         char packBadge[32];
         if (bData.moduleCount >= 2) {
-            snprintf(packBadge, sizeof(packBadge), "BMS: ONLINE (%u PACKS)", bData.moduleCount);
+            snprintf(packBadge, sizeof(packBadge), "BMS ONLINE: 501Ah (2 PACKS)");
         } else {
-            snprintf(packBadge, sizeof(packBadge), "BMS: ONLINE (1 PACK)");
+            snprintf(packBadge, sizeof(packBadge), "BMS ONLINE: (1 PACK)");
         }
-        fillRect(570, 7, 215, 30, COLOR_DARK_GREEN);
-        drawRect(570, 7, 215, 30, COLOR_GREEN);
-        drawString(585, 16, packBadge, COLOR_WHITE, COLOR_DARK_GREEN, 1);
+        fillRect(550, 7, 235, 30, COLOR_DARK_GREEN);
+        drawRect(550, 7, 235, 30, COLOR_GREEN);
+        drawString(562, 16, packBadge, COLOR_WHITE, COLOR_DARK_GREEN, 1);
     } else {
         fillRect(570, 7, 215, 30, COLOR_RED);
         drawRect(570, 7, 215, 30, COLOR_WHITE);
         drawString(585, 16, "BMS: WAITING / OFFLINE", COLOR_WHITE, COLOR_RED, 1);
     }
 
-    // 2. Four Top Metric Cards (Y: 48 to 178)
+    // 2. Four Top Metric Cards (Y: 48 to 170)
     const int cardY = 48;
-    const int cardH = 130;
+    const int cardH = 122;
     const int cardW = 190;
     char valBuf[32];
     char subBuf[64];
@@ -547,23 +547,30 @@ void UIManager::drawDashboard(const BatteryData& bData, const ScannerOverview& o
     fillRect(c0X, cardY, cardW, 22, COLOR_CARD_HEADER);
     drawString(c0X + 8, cardY + 6, "STATE OF CHARGE", COLOR_CYAN, COLOR_CARD_HEADER, 1);
 
-    uint16_t socColor = (bData.soc_percent >= 40) ? COLOR_GREEN :
-                        ((bData.soc_percent >= 20) ? COLOR_YELLOW : COLOR_RED);
-    snprintf(valBuf, sizeof(valBuf), "%u %%", bData.soc_percent);
-    drawString(c0X + 18, cardY + 30, valBuf, socColor, COLOR_CARD_BG, 3);
+    if (bData.communicationOK) {
+        uint16_t socColor = (bData.soc_percent >= 40) ? COLOR_GREEN :
+                            ((bData.soc_percent >= 20) ? COLOR_YELLOW : COLOR_RED);
+        snprintf(valBuf, sizeof(valBuf), "%u %%", bData.soc_percent);
+        drawString(c0X + 18, cardY + 28, valBuf, socColor, COLOR_CARD_BG, 3);
 
-    // Battery outline with positive terminal tab
-    drawRect(c0X + 12, cardY + 64, 150, 16, COLOR_WHITE);
-    fillRect(c0X + 162, cardY + 68, 4, 8, COLOR_WHITE);
-    int socFillW = (146 * bData.soc_percent) / 100;
-    if (socFillW > 146) socFillW = 146;
-    if (socFillW > 0) fillRect(c0X + 14, cardY + 66, socFillW, 12, socColor);
+        drawRect(c0X + 12, cardY + 60, 150, 14, COLOR_WHITE);
+        fillRect(c0X + 162, cardY + 63, 4, 8, COLOR_WHITE);
+        int socFillW = (146 * bData.soc_percent) / 100;
+        if (socFillW > 146) socFillW = 146;
+        if (socFillW > 0) fillRect(c0X + 14, cardY + 62, socFillW, 10, socColor);
 
-    snprintf(subBuf, sizeof(subBuf), "Cap: %u Ah | SOH: %u%%",
-             bData.totalCapacity_Ah > 0 ? bData.totalCapacity_Ah : 501,
-             bData.soh_percent > 0 ? bData.soh_percent : 100);
-    drawString(c0X + 10, cardY + 90, subBuf, COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-    drawString(c0X + 10, cardY + 108, "Pack Balance: Optimal", COLOR_GREEN, COLOR_CARD_BG, 1);
+        snprintf(subBuf, sizeof(subBuf), "Cap: %u Ah | SOH: %u%%",
+                 bData.totalCapacity_Ah > 0 ? bData.totalCapacity_Ah : 501,
+                 bData.soh_percent > 0 ? bData.soh_percent : 100);
+        drawString(c0X + 10, cardY + 82, subBuf, COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        drawString(c0X + 10, cardY + 100, "Pack Balance: Optimal", COLOR_GREEN, COLOR_CARD_BG, 1);
+    } else {
+        drawString(c0X + 18, cardY + 28, "-- %", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 3);
+        drawRect(c0X + 12, cardY + 60, 150, 14, COLOR_MID_GRAY);
+        fillRect(c0X + 162, cardY + 63, 4, 8, COLOR_MID_GRAY);
+        drawString(c0X + 10, cardY + 82, "Cap: 501 Ah (Offline)", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        drawString(c0X + 10, cardY + 100, "Status: Waiting CAN", COLOR_ORANGE, COLOR_CARD_BG, 1);
+    }
 
     // --- CARD 1: STORAGE POWER ---
     int c1X = 206;
@@ -572,30 +579,38 @@ void UIManager::drawDashboard(const BatteryData& bData, const ScannerOverview& o
     fillRect(c1X, cardY, cardW, 22, COLOR_CARD_HEADER);
     drawString(c1X + 8, cardY + 6, "STORAGE POWER", COLOR_CYAN, COLOR_CARD_HEADER, 1);
 
-    float pKw = bData.power_W / 1000.0f;
-    if (bData.power_W > 50.0f) {
-        snprintf(valBuf, sizeof(valBuf), "+%.2f kW", pKw);
-        drawString(c1X + 10, cardY + 30, valBuf, COLOR_GREEN, COLOR_CARD_BG, 3);
-        fillRect(c1X + 12, cardY + 64, 100, 18, COLOR_DARK_GREEN);
-        drawRect(c1X + 12, cardY + 64, 100, 18, COLOR_GREEN);
-        drawString(c1X + 20, cardY + 69, "CHARGING", COLOR_WHITE, COLOR_DARK_GREEN, 1);
-    } else if (bData.power_W < -50.0f) {
-        snprintf(valBuf, sizeof(valBuf), "%.2f kW", pKw);
-        drawString(c1X + 10, cardY + 30, valBuf, COLOR_ORANGE, COLOR_CARD_BG, 3);
-        fillRect(c1X + 12, cardY + 64, 115, 18, 0x8200);
-        drawRect(c1X + 12, cardY + 64, 115, 18, COLOR_ORANGE);
-        drawString(c1X + 18, cardY + 69, "DISCHARGING", COLOR_WHITE, 0x8200, 1);
+    if (bData.communicationOK) {
+        float pKw = bData.power_W / 1000.0f;
+        if (bData.power_W > 50.0f) {
+            snprintf(valBuf, sizeof(valBuf), "+%.2f kW", pKw);
+            drawString(c1X + 10, cardY + 28, valBuf, COLOR_GREEN, COLOR_CARD_BG, 3);
+            fillRect(c1X + 12, cardY + 60, 100, 16, COLOR_DARK_GREEN);
+            drawRect(c1X + 12, cardY + 60, 100, 16, COLOR_GREEN);
+            drawString(c1X + 20, cardY + 64, "CHARGING", COLOR_WHITE, COLOR_DARK_GREEN, 1);
+        } else if (bData.power_W < -50.0f) {
+            snprintf(valBuf, sizeof(valBuf), "%.2f kW", pKw);
+            drawString(c1X + 10, cardY + 28, valBuf, COLOR_ORANGE, COLOR_CARD_BG, 3);
+            fillRect(c1X + 12, cardY + 60, 115, 16, 0x8200);
+            drawRect(c1X + 12, cardY + 60, 115, 16, COLOR_ORANGE);
+            drawString(c1X + 18, cardY + 64, "DISCHARGING", COLOR_WHITE, 0x8200, 1);
+        } else {
+            drawString(c1X + 10, cardY + 28, "0.00 kW", COLOR_CYAN, COLOR_CARD_BG, 3);
+            fillRect(c1X + 12, cardY + 60, 90, 16, COLOR_DARK_GRAY);
+            drawRect(c1X + 12, cardY + 60, 90, 16, COLOR_MID_GRAY);
+            drawString(c1X + 18, cardY + 64, "STANDBY", COLOR_WHITE, COLOR_DARK_GRAY, 1);
+        }
+        snprintf(subBuf, sizeof(subBuf), "Max Chg : %.0f A (~21kW)", bData.chargeCurrentLimit_A);
+        drawString(c1X + 10, cardY + 82, subBuf, COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        snprintf(subBuf, sizeof(subBuf), "Max Dchg: %.0f A (~20kW)", bData.dischargeCurrentLimit_A);
+        drawString(c1X + 10, cardY + 100, subBuf, COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
     } else {
-        drawString(c1X + 10, cardY + 30, "0.00 kW", COLOR_CYAN, COLOR_CARD_BG, 3);
-        fillRect(c1X + 12, cardY + 64, 90, 18, COLOR_DARK_GRAY);
-        drawRect(c1X + 12, cardY + 64, 90, 18, COLOR_MID_GRAY);
-        drawString(c1X + 18, cardY + 69, "STANDBY", COLOR_WHITE, COLOR_DARK_GRAY, 1);
+        drawString(c1X + 10, cardY + 28, "--- kW", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 3);
+        fillRect(c1X + 12, cardY + 60, 90, 16, COLOR_DARK_GRAY);
+        drawRect(c1X + 12, cardY + 60, 90, 16, COLOR_MID_GRAY);
+        drawString(c1X + 18, cardY + 64, "STANDBY", COLOR_WHITE, COLOR_DARK_GRAY, 1);
+        drawString(c1X + 10, cardY + 82, "Max Chg : --- A", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        drawString(c1X + 10, cardY + 100, "Max Dchg: --- A", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
     }
-
-    snprintf(subBuf, sizeof(subBuf), "Max Chg: %.0f A", bData.chargeCurrentLimit_A);
-    drawString(c1X + 10, cardY + 90, subBuf, COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-    snprintf(subBuf, sizeof(subBuf), "Max Dchg: %.0f A", bData.dischargeCurrentLimit_A);
-    drawString(c1X + 10, cardY + 108, subBuf, COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
 
     // --- CARD 2: BANK VOLTAGE ---
     int c2X = 404;
@@ -604,18 +619,23 @@ void UIManager::drawDashboard(const BatteryData& bData, const ScannerOverview& o
     fillRect(c2X, cardY, cardW, 22, COLOR_CARD_HEADER);
     drawString(c2X + 8, cardY + 6, "BANK VOLTAGE", COLOR_CYAN, COLOR_CARD_HEADER, 1);
 
-    snprintf(valBuf, sizeof(valBuf), "%.2f V", bData.voltage_V);
-    drawString(c2X + 12, cardY + 30, valBuf, COLOR_YELLOW, COLOR_CARD_BG, 3);
-
-    float avgCell = (bData.voltage_V > 10.0f) ? (bData.voltage_V / 16.0f) : 0.0f;
-    snprintf(subBuf, sizeof(subBuf), "Avg Cell: %.3f V", avgCell);
-    drawString(c2X + 12, cardY + 68, subBuf, COLOR_CYAN, COLOR_CARD_BG, 1);
-
-    snprintf(subBuf, sizeof(subBuf), "Chg Limit: %.2f V", bData.chargeVoltageLimit_V);
-    drawString(c2X + 10, cardY + 90, subBuf, COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-    snprintf(subBuf, sizeof(subBuf), "Cut-off: %.2f V",
-             bData.dischargeCutoffVoltage_V > 0 ? bData.dischargeCutoffVoltage_V : 44.8f);
-    drawString(c2X + 10, cardY + 108, subBuf, COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+    if (bData.communicationOK) {
+        snprintf(valBuf, sizeof(valBuf), "%.2f V", bData.voltage_V);
+        drawString(c2X + 12, cardY + 28, valBuf, COLOR_YELLOW, COLOR_CARD_BG, 3);
+        float avgCell = (bData.voltage_V > 10.0f) ? (bData.voltage_V / 16.0f) : 0.0f;
+        snprintf(subBuf, sizeof(subBuf), "Avg Cell : %.3f V", avgCell);
+        drawString(c2X + 12, cardY + 64, subBuf, COLOR_CYAN, COLOR_CARD_BG, 1);
+        snprintf(subBuf, sizeof(subBuf), "Chg Limit: %.2f V", bData.chargeVoltageLimit_V);
+        drawString(c2X + 10, cardY + 82, subBuf, COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        snprintf(subBuf, sizeof(subBuf), "Cut-off  : %.2f V",
+                 bData.dischargeCutoffVoltage_V > 0 ? bData.dischargeCutoffVoltage_V : 44.8f);
+        drawString(c2X + 10, cardY + 100, subBuf, COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+    } else {
+        drawString(c2X + 12, cardY + 28, "--.-- V", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 3);
+        drawString(c2X + 12, cardY + 64, "Avg Cell : -.--- V", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        drawString(c2X + 10, cardY + 82, "Chg Limit: 57.60 V", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        drawString(c2X + 10, cardY + 100, "Cut-off  : 44.80 V", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+    }
 
     // --- CARD 3: BANK CURRENT ---
     int c3X = 602;
@@ -625,23 +645,28 @@ void UIManager::drawDashboard(const BatteryData& bData, const ScannerOverview& o
     fillRect(c3X, cardY, c3W, 22, COLOR_CARD_HEADER);
     drawString(c3X + 8, cardY + 6, "BANK CURRENT", COLOR_CYAN, COLOR_CARD_HEADER, 1);
 
-    uint16_t curColor = (bData.current_A > 0.5f) ? COLOR_GREEN :
-                        ((bData.current_A < -0.5f) ? COLOR_ORANGE : COLOR_WHITE);
-    snprintf(valBuf, sizeof(valBuf), "%+.1f A", bData.current_A);
-    drawString(c3X + 12, cardY + 30, valBuf, curColor, COLOR_CARD_BG, 3);
+    if (bData.communicationOK) {
+        uint16_t curColor = (bData.current_A > 0.5f) ? COLOR_GREEN :
+                            ((bData.current_A < -0.5f) ? COLOR_ORANGE : COLOR_WHITE);
+        snprintf(valBuf, sizeof(valBuf), "%+.1f A", bData.current_A);
+        drawString(c3X + 12, cardY + 28, valBuf, curColor, COLOR_CARD_BG, 3);
+        snprintf(subBuf, sizeof(subBuf), "Pack Temp: %.1f C", bData.temperature_C);
+        drawString(c3X + 12, cardY + 64, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+        snprintf(subBuf, sizeof(subBuf), "Cur Limit: %.0f A", bData.chargeCurrentLimit_A);
+        drawString(c3X + 10, cardY + 82, subBuf, COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        drawString(c3X + 10, cardY + 100, "Modules  : 2 Synced", COLOR_GREEN, COLOR_CARD_BG, 1);
+    } else {
+        drawString(c3X + 12, cardY + 28, "---.- A", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 3);
+        drawString(c3X + 12, cardY + 64, "Pack Temp: --.- C", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        drawString(c3X + 10, cardY + 82, "Cur Limit: 390 A", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        drawString(c3X + 10, cardY + 100, "Modules  : 2 Expected", COLOR_ORANGE, COLOR_CARD_BG, 1);
+    }
 
-    snprintf(subBuf, sizeof(subBuf), "Pack Temp: %.1f C", bData.temperature_C);
-    drawString(c3X + 12, cardY + 68, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+    // 3. Middle Section: Detail Panels (Y: 176 to 424)
+    const int midY = 176;
+    const int midH = 248;
 
-    snprintf(subBuf, sizeof(subBuf), "Cur Limit: %.0f A", bData.chargeCurrentLimit_A);
-    drawString(c3X + 10, cardY + 90, subBuf, COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-    drawString(c3X + 10, cardY + 108, "Modules: In Sync", COLOR_GREEN, COLOR_CARD_BG, 1);
-
-    // 3. Middle Section: Detail Panels (Y: 184 to 424)
-    const int midY = 184;
-    const int midH = 240;
-
-    // --- LEFT PANEL: CELL HEALTH & VOLTAGE BALANCE ---
+    // --- LEFT PANEL: CELL HEALTH & BALANCING ---
     int p1X = 8;
     int p1W = 388;
     fillRect(p1X, midY, p1W, midH, COLOR_CARD_BG);
@@ -649,66 +674,87 @@ void UIManager::drawDashboard(const BatteryData& bData, const ScannerOverview& o
     fillRect(p1X, midY, p1W, 24, COLOR_DARK_BLUE);
     drawString(p1X + 10, midY + 7, "CELL HEALTH & VOLTAGE BALANCE", COLOR_CYAN, COLOR_DARK_BLUE, 1);
 
-    snprintf(subBuf, sizeof(subBuf), "Min Cell Voltage :  %.3f V", bData.minCellVoltage_V);
-    drawString(p1X + 15, midY + 34, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+    if (bData.communicationOK) {
+        // Two Sub-Boxes for Min and Max Cell
+        fillRect(p1X + 12, midY + 30, 175, 48, COLOR_DARK_GRAY);
+        drawRect(p1X + 12, midY + 30, 175, 48, COLOR_MID_GRAY);
+        drawString(p1X + 20, midY + 34, "MIN CELL VOLTAGE", COLOR_CYAN, COLOR_DARK_GRAY, 1);
+        snprintf(subBuf, sizeof(subBuf), "%.3f V", bData.minCellVoltage_V);
+        drawString(p1X + 20, midY + 48, subBuf, COLOR_CYAN, COLOR_DARK_GRAY, 2);
 
-    snprintf(subBuf, sizeof(subBuf), "Max Cell Voltage :  %.3f V", bData.maxCellVoltage_V);
-    drawString(p1X + 15, midY + 54, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+        fillRect(p1X + 197, midY + 30, 179, 48, COLOR_DARK_GRAY);
+        drawRect(p1X + 197, midY + 30, 179, 48, COLOR_MID_GRAY);
+        drawString(p1X + 205, midY + 34, "MAX CELL VOLTAGE", COLOR_YELLOW, COLOR_DARK_GRAY, 1);
+        snprintf(subBuf, sizeof(subBuf), "%.3f V", bData.maxCellVoltage_V);
+        drawString(p1X + 205, midY + 48, subBuf, COLOR_YELLOW, COLOR_DARK_GRAY, 2);
 
-    snprintf(subBuf, sizeof(subBuf), "Cell Delta (dV)  :  %.0f mV", bData.cellDelta_mV);
-    drawString(p1X + 15, midY + 74, subBuf, COLOR_YELLOW, COLOR_CARD_BG, 1);
+        // Delta Hero Row
+        drawString(p1X + 15, midY + 86, "CELL DELTA (dV):", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        snprintf(subBuf, sizeof(subBuf), "%.0f mV", bData.cellDelta_mV);
+        drawString(p1X + 130, midY + 84, subBuf, COLOR_YELLOW, COLOR_CARD_BG, 2);
 
-    // Balance Quality Badge
-    if (bData.cellDelta_mV < 20.0f) {
-        fillRect(p1X + 210, midY + 70, 160, 20, COLOR_DARK_GREEN);
-        drawRect(p1X + 210, midY + 70, 160, 20, COLOR_GREEN);
-        drawString(p1X + 218, midY + 76, "[ PERFECT < 20mV ]", COLOR_WHITE, COLOR_DARK_GREEN, 1);
-    } else if (bData.cellDelta_mV < 50.0f) {
-        fillRect(p1X + 210, midY + 70, 160, 20, COLOR_DARK_GRAY);
-        drawRect(p1X + 210, midY + 70, 160, 20, COLOR_YELLOW);
-        drawString(p1X + 218, midY + 76, "[ GOOD < 50mV ]", COLOR_YELLOW, COLOR_DARK_GRAY, 1);
+        if (bData.cellDelta_mV < 20.0f) {
+            fillRect(p1X + 215, midY + 82, 160, 20, COLOR_DARK_GREEN);
+            drawRect(p1X + 215, midY + 82, 160, 20, COLOR_GREEN);
+            drawString(p1X + 225, midY + 88, "[ PERFECT < 20mV ]", COLOR_WHITE, COLOR_DARK_GREEN, 1);
+        } else if (bData.cellDelta_mV < 50.0f) {
+            fillRect(p1X + 215, midY + 82, 160, 20, COLOR_DARK_GRAY);
+            drawRect(p1X + 215, midY + 82, 160, 20, COLOR_YELLOW);
+            drawString(p1X + 225, midY + 88, "[ GOOD < 50mV ]", COLOR_YELLOW, COLOR_DARK_GRAY, 1);
+        } else {
+            fillRect(p1X + 215, midY + 82, 160, 20, 0x8200);
+            drawRect(p1X + 215, midY + 82, 160, 20, COLOR_ORANGE);
+            drawString(p1X + 220, midY + 88, "[ IMBALANCE > 50mV ]", COLOR_WHITE, 0x8200, 1);
+        }
+
+        // Graphical Spread Gauge (3.00V to 3.65V)
+        int gaugeX = p1X + 15;
+        int gaugeY = midY + 116;
+        int gaugeW = 358;
+        int gaugeH = 12;
+        fillRect(gaugeX, gaugeY, gaugeW, gaugeH, COLOR_DARK_GRAY);
+        drawRect(gaugeX, gaugeY, gaugeW, gaugeH, COLOR_MID_GRAY);
+
+        float minV = bData.minCellVoltage_V > 2.8f ? bData.minCellVoltage_V : 3.0f;
+        float maxV = bData.maxCellVoltage_V > 2.8f ? bData.maxCellVoltage_V : 3.0f;
+        int minPx = gaugeX + (int)(((minV - 3.0f) / 0.65f) * gaugeW);
+        int maxPx = gaugeX + (int)(((maxV - 3.0f) / 0.65f) * gaugeW);
+        if (minPx < gaugeX) minPx = gaugeX;
+        if (maxPx > gaugeX + gaugeW - 4) maxPx = gaugeX + gaugeW - 4;
+        if (maxPx < minPx + 4) maxPx = minPx + 4;
+        fillRect(minPx, gaugeY + 2, maxPx - minPx, gaugeH - 4, COLOR_CYAN);
+        fillRect(minPx - 1, gaugeY - 2, 3, gaugeH + 4, COLOR_YELLOW);
+        fillRect(maxPx - 1, gaugeY - 2, 3, gaugeH + 4, COLOR_GREEN);
+
+        drawString(gaugeX, gaugeY + 16, "3.00V Empty", COLOR_MID_GRAY, COLOR_CARD_BG, 1);
+        drawString(gaugeX + 130, gaugeY + 16, "3.37V Rest", COLOR_CYAN, COLOR_CARD_BG, 1);
+        drawString(gaugeX + 285, gaugeY + 16, "3.65V Full", COLOR_MID_GRAY, COLOR_CARD_BG, 1);
+
+        // System Diagnostic Details
+        snprintf(subBuf, sizeof(subBuf), "Cell Temperatures :  Min %.1f C  /  Max %.1f C",
+                 bData.minCellTemp_C, bData.maxCellTemp_C);
+        drawString(p1X + 15, midY + 148, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+
+        snprintf(subBuf, sizeof(subBuf), "BMS Ambient Temp  :  %.1f C   (Health SOH: %u%%)",
+                 bData.temperature_C, bData.soh_percent);
+        drawString(p1X + 15, midY + 168, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+
+        drawString(p1X + 15, midY + 188, "Balancing Circuit :  Passive Standby (Delta < 20mV)", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+
+        float estKwh = (bData.totalCapacity_Ah * bData.voltage_V * (bData.soc_percent / 100.0f)) / 1000.0f;
+        snprintf(subBuf, sizeof(subBuf), "Stored Energy Est :  ~%.1f kWh of 25.6 kWh", estKwh);
+        drawString(p1X + 15, midY + 210, subBuf, COLOR_GREEN, COLOR_CARD_BG, 1);
     } else {
-        fillRect(p1X + 210, midY + 70, 160, 20, 0x8200);
-        drawRect(p1X + 210, midY + 70, 160, 20, COLOR_ORANGE);
-        drawString(p1X + 218, midY + 76, "[ IMBALANCE > 50mV ]", COLOR_WHITE, 0x8200, 1);
+        // Clean Offline Guide
+        drawString(p1X + 20, midY + 40, "WAITING FOR BMS TELEMETRY...", COLOR_YELLOW, COLOR_CARD_BG, 1);
+        drawString(p1X + 20, midY + 65, "* Check CAN cabling: Pin 4=CAN-H, Pin 5=CAN-L", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        drawString(p1X + 20, midY + 85, "* Inverter baud rate: 500 kbit/s (standard)", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        drawString(p1X + 20, midY + 105, "* Jumper 13: REMOVED / OFF (Passive sniffer)", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        drawString(p1X + 20, midY + 125, "* Rosen Master (DIP 1000) must be active", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        drawString(p1X + 20, midY + 155, "Once battery transmits, cell delta &", COLOR_CYAN, COLOR_CARD_BG, 1);
+        drawString(p1X + 20, midY + 175, "voltages will appear immediately.", COLOR_CYAN, COLOR_CARD_BG, 1);
+        drawString(p1X + 20, midY + 210, "See Page 3 (CAN Scanner) for raw frame traffic.", COLOR_MID_GRAY, COLOR_CARD_BG, 1);
     }
-
-    // Graphical Spread Gauge (3.00V to 3.65V)
-    drawString(p1X + 15, midY + 98, "LiFePO4 Voltage Spread (3.00V -> 3.65V):", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-    int gaugeX = p1X + 15;
-    int gaugeY = midY + 114;
-    int gaugeW = 358;
-    int gaugeH = 14;
-    fillRect(gaugeX, gaugeY, gaugeW, gaugeH, COLOR_DARK_GRAY);
-    drawRect(gaugeX, gaugeY, gaugeW, gaugeH, COLOR_MID_GRAY);
-
-    float minV = bData.minCellVoltage_V > 2.8f ? bData.minCellVoltage_V : 3.0f;
-    float maxV = bData.maxCellVoltage_V > 2.8f ? bData.maxCellVoltage_V : 3.0f;
-    int minPx = gaugeX + (int)(((minV - 3.0f) / 0.65f) * gaugeW);
-    int maxPx = gaugeX + (int)(((maxV - 3.0f) / 0.65f) * gaugeW);
-    if (minPx < gaugeX) minPx = gaugeX;
-    if (maxPx > gaugeX + gaugeW - 4) maxPx = gaugeX + gaugeW - 4;
-    if (maxPx < minPx + 4) maxPx = minPx + 4;
-    fillRect(minPx, gaugeY + 2, maxPx - minPx, gaugeH - 4, COLOR_CYAN);
-    fillRect(minPx - 1, gaugeY - 2, 3, gaugeH + 4, COLOR_YELLOW);
-    fillRect(maxPx - 1, gaugeY - 2, 3, gaugeH + 4, COLOR_GREEN);
-
-    drawString(gaugeX, gaugeY + 18, "3.00V (Empty)", COLOR_MID_GRAY, COLOR_CARD_BG, 1);
-    drawString(gaugeX + 120, gaugeY + 18, "3.37V (Rest)", COLOR_CYAN, COLOR_CARD_BG, 1);
-    drawString(gaugeX + 275, gaugeY + 18, "3.65V (Full)", COLOR_MID_GRAY, COLOR_CARD_BG, 1);
-
-    snprintf(subBuf, sizeof(subBuf), "Min Cell Temp    :  %.1f C     Max: %.1f C", bData.minCellTemp_C, bData.maxCellTemp_C);
-    drawString(p1X + 15, midY + 152, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
-
-    snprintf(subBuf, sizeof(subBuf), "BMS Ambient Temp :  %.1f C     SOH: %u %%", bData.temperature_C, bData.soh_percent);
-    drawString(p1X + 15, midY + 172, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
-
-    drawString(p1X + 15, midY + 192, "Passive Balance  :  Active on Overvoltage Cells", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-
-    float estKwh = (bData.totalCapacity_Ah * bData.voltage_V * (bData.soc_percent / 100.0f)) / 1000.0f;
-    float maxKwh = (bData.totalCapacity_Ah * 51.2f) / 1000.0f;
-    snprintf(subBuf, sizeof(subBuf), "Estimated Energy :  ~%.1f kWh stored of %.1f kWh", estKwh, maxKwh > 0 ? maxKwh : 25.6f);
-    drawString(p1X + 15, midY + 212, subBuf, COLOR_GREEN, COLOR_CARD_BG, 1);
 
     // --- RIGHT PANEL: SYSTEM LIMITS & OPERATIONAL STATUS ---
     int p2X = 404;
@@ -716,71 +762,83 @@ void UIManager::drawDashboard(const BatteryData& bData, const ScannerOverview& o
     fillRect(p2X, midY, p2W, midH, COLOR_CARD_BG);
     drawRect(p2X, midY, p2W, midH, COLOR_CARD_BORDER);
     fillRect(p2X, midY, p2W, 24, COLOR_DARK_BLUE);
-    drawString(p2X + 10, midY + 7, "SYSTEM LIMITS & OPERATIONAL STATUS", COLOR_CYAN, COLOR_DARK_BLUE, 1);
+    drawString(p2X + 10, midY + 7, "INVERTER LIMITS & BMS STATUS", COLOR_CYAN, COLOR_DARK_BLUE, 1);
 
-    snprintf(subBuf, sizeof(subBuf), "Max Charge Voltage   :  %.2f V", bData.chargeVoltageLimit_V);
-    drawString(p2X + 15, midY + 34, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+    if (bData.communicationOK) {
+        snprintf(subBuf, sizeof(subBuf), "Charge Voltage Limit :  %.2f V", bData.chargeVoltageLimit_V);
+        drawString(p2X + 15, midY + 34, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
 
-    snprintf(subBuf, sizeof(subBuf), "Max Charge Current   :  %.1f A  (~%.0f kW Max)",
-             bData.chargeCurrentLimit_A, (bData.chargeCurrentLimit_A * 54.0f) / 1000.0f);
-    drawString(p2X + 15, midY + 54, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+        snprintf(subBuf, sizeof(subBuf), "Charge Current Limit :  %.1f A  (~%.0f kW)",
+                 bData.chargeCurrentLimit_A, (bData.chargeCurrentLimit_A * 54.0f) / 1000.0f);
+        drawString(p2X + 15, midY + 54, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
 
-    snprintf(subBuf, sizeof(subBuf), "Max Discharge Current:  %.1f A  (~%.0f kW Max)",
-             bData.dischargeCurrentLimit_A, (bData.dischargeCurrentLimit_A * 51.0f) / 1000.0f);
-    drawString(p2X + 15, midY + 74, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+        snprintf(subBuf, sizeof(subBuf), "Discharge Current Max:  %.1f A  (~%.0f kW)",
+                 bData.dischargeCurrentLimit_A, (bData.dischargeCurrentLimit_A * 51.0f) / 1000.0f);
+        drawString(p2X + 15, midY + 74, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
 
-    snprintf(subBuf, sizeof(subBuf), "Discharge Cut-off    :  %.2f V",
-             bData.dischargeCutoffVoltage_V > 0 ? bData.dischargeCutoffVoltage_V : 44.8f);
-    drawString(p2X + 15, midY + 94, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+        snprintf(subBuf, sizeof(subBuf), "Discharge Cut-off    :  %.2f V",
+                 bData.dischargeCutoffVoltage_V > 0 ? bData.dischargeCutoffVoltage_V : 44.8f);
+        drawString(p2X + 15, midY + 94, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
 
-    snprintf(subBuf, sizeof(subBuf), "Cascade Modules      :  %u Packs (Rosen Master + RPT)",
-             bData.moduleCount >= 2 ? bData.moduleCount : 2);
-    drawString(p2X + 15, midY + 114, subBuf, COLOR_GREEN, COLOR_CARD_BG, 1);
+        drawFastHLine(p2X + 15, midY + 116, p2W - 30, COLOR_DARK_GRAY);
 
-    // Operational Switches Badges
-    drawString(p2X + 15, midY + 138, "Charge Switch        :", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-    if (bData.chargeAllowed) {
-        fillRect(p2X + 195, midY + 134, 110, 18, COLOR_DARK_GREEN);
-        drawRect(p2X + 195, midY + 134, 110, 18, COLOR_GREEN);
-        drawString(p2X + 215, midY + 139, "ENABLED", COLOR_WHITE, COLOR_DARK_GREEN, 1);
+        // Operational Switches Badges (Clean aligned columns)
+        drawString(p2X + 15, midY + 128, "Charge Switch        :", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        if (bData.chargeAllowed) {
+            fillRect(p2X + 195, midY + 124, 100, 18, COLOR_DARK_GREEN);
+            drawRect(p2X + 195, midY + 124, 100, 18, COLOR_GREEN);
+            drawString(p2X + 210, midY + 129, "ENABLED", COLOR_WHITE, COLOR_DARK_GREEN, 1);
+        } else {
+            fillRect(p2X + 195, midY + 124, 100, 18, COLOR_RED);
+            drawRect(p2X + 195, midY + 124, 100, 18, COLOR_WHITE);
+            drawString(p2X + 208, midY + 129, "DISABLED", COLOR_WHITE, COLOR_RED, 1);
+        }
+
+        drawString(p2X + 15, midY + 150, "Discharge Switch     :", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        if (bData.dischargeAllowed) {
+            fillRect(p2X + 195, midY + 146, 100, 18, COLOR_DARK_GREEN);
+            drawRect(p2X + 195, midY + 146, 100, 18, COLOR_GREEN);
+            drawString(p2X + 210, midY + 151, "ENABLED", COLOR_WHITE, COLOR_DARK_GREEN, 1);
+        } else {
+            fillRect(p2X + 195, midY + 146, 100, 18, COLOR_RED);
+            drawRect(p2X + 195, midY + 146, 100, 18, COLOR_WHITE);
+            drawString(p2X + 208, midY + 151, "DISABLED", COLOR_WHITE, COLOR_RED, 1);
+        }
+
+        drawString(p2X + 15, midY + 172, "BMS Safety State     :", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        if (!bData.protectionActive && !bData.warningActive) {
+            fillRect(p2X + 195, midY + 168, 175, 18, COLOR_DARK_GREEN);
+            drawRect(p2X + 195, midY + 168, 175, 18, COLOR_GREEN);
+            drawString(p2X + 205, midY + 173, "NORMAL / NO ALARMS", COLOR_WHITE, COLOR_DARK_GREEN, 1);
+        } else {
+            fillRect(p2X + 195, midY + 168, 175, 18, COLOR_RED);
+            drawRect(p2X + 195, midY + 168, 175, 18, COLOR_WHITE);
+            drawString(p2X + 205, midY + 173, "WARNING / ALARM", COLOR_WHITE, COLOR_RED, 1);
+        }
+
+        drawFastHLine(p2X + 15, midY + 196, p2W - 30, COLOR_DARK_GRAY);
+
+        drawString(p2X + 15, midY + 206, "Storage Configuration :  Rosen 200Ah + RPT 300Ah", COLOR_GREEN, COLOR_CARD_BG, 1);
+        snprintf(subBuf, sizeof(subBuf), "Inverter Protocol     :  %s CAN 500k (501 Ah Bank)",
+                 strlen(bData.manufacturer) > 0 ? bData.manufacturer : "PYLON");
+        drawString(p2X + 15, midY + 224, subBuf, COLOR_CYAN, COLOR_CARD_BG, 1);
     } else {
-        fillRect(p2X + 195, midY + 134, 110, 18, COLOR_RED);
-        drawRect(p2X + 195, midY + 134, 110, 18, COLOR_WHITE);
-        drawString(p2X + 212, midY + 139, "DISABLED", COLOR_WHITE, COLOR_RED, 1);
+        drawString(p2X + 20, midY + 40, "STANDBY CONFIGURATION", COLOR_YELLOW, COLOR_CARD_BG, 1);
+        drawString(p2X + 20, midY + 65, "Total Bank Capacity :  501 Ah (25.6 kWh)", COLOR_WHITE, COLOR_CARD_BG, 1);
+        drawString(p2X + 20, midY + 85, "Master Battery      :  Rosen (DIP 1 0 0 0)", COLOR_WHITE, COLOR_CARD_BG, 1);
+        drawString(p2X + 20, midY + 105, "Slave Battery       :  RPT Tower (DIP 0 1 0 0)", COLOR_WHITE, COLOR_CARD_BG, 1);
+        drawString(p2X + 20, midY + 125, "Cascade Interface   :  RS485 Inter-battery", COLOR_WHITE, COLOR_CARD_BG, 1);
+        drawString(p2X + 20, midY + 145, "Max Bank Limits     :  390 A Charge / Discharge", COLOR_CYAN, COLOR_CARD_BG, 1);
+        drawString(p2X + 20, midY + 165, "Inverter Link       :  Deye BMS CAN Port", COLOR_CYAN, COLOR_CARD_BG, 1);
+        drawString(p2X + 20, midY + 210, "Status: Listening on CAN-H / CAN-L...", COLOR_GREEN, COLOR_CARD_BG, 1);
     }
-
-    drawString(p2X + 15, midY + 162, "Discharge Switch     :", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-    if (bData.dischargeAllowed) {
-        fillRect(p2X + 195, midY + 158, 110, 18, COLOR_DARK_GREEN);
-        drawRect(p2X + 195, midY + 158, 110, 18, COLOR_GREEN);
-        drawString(p2X + 215, midY + 163, "ENABLED", COLOR_WHITE, COLOR_DARK_GREEN, 1);
-    } else {
-        fillRect(p2X + 195, midY + 158, 110, 18, COLOR_RED);
-        drawRect(p2X + 195, midY + 158, 110, 18, COLOR_WHITE);
-        drawString(p2X + 212, midY + 163, "DISABLED", COLOR_WHITE, COLOR_RED, 1);
-    }
-
-    drawString(p2X + 15, midY + 186, "BMS Protection State :", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-    if (!bData.protectionActive && !bData.warningActive) {
-        fillRect(p2X + 195, midY + 182, 165, 18, COLOR_DARK_GREEN);
-        drawRect(p2X + 195, midY + 182, 165, 18, COLOR_GREEN);
-        drawString(p2X + 203, midY + 187, "NORMAL / NO ALARMS", COLOR_WHITE, COLOR_DARK_GREEN, 1);
-    } else {
-        fillRect(p2X + 195, midY + 182, 165, 18, COLOR_RED);
-        drawRect(p2X + 195, midY + 182, 165, 18, COLOR_WHITE);
-        drawString(p2X + 203, midY + 187, "WARNING / ALARM", COLOR_WHITE, COLOR_RED, 1);
-    }
-
-    snprintf(subBuf, sizeof(subBuf), "BMS Hardware ID      :  %s CAN 500k",
-             strlen(bData.manufacturer) > 0 ? bData.manufacturer : "PYLON");
-    drawString(p2X + 15, midY + 212, subBuf, COLOR_CYAN, COLOR_CARD_BG, 1);
 
     // 4. Bottom Status & Navigation Bar
     drawBottomNav(0);
 }
 
 // -----------------------------------------------------------------------------
-// Phase 2: Page 2 - Cell Balance & Voltage Diagnostics (16-Cell Profile)
+// Phase 2: Page 2 - Cell Balance & Voltage Diagnostics (Dual Pack: 32 Cells)
 // -----------------------------------------------------------------------------
 void UIManager::drawCellDiagnostics(const BatteryData& bData, const ScannerOverview& overview) {
     fillScreen(COLOR_BLACK);
@@ -788,150 +846,138 @@ void UIManager::drawCellDiagnostics(const BatteryData& bData, const ScannerOverv
     // 1. Top Header Bar (Y: 0 to 44)
     fillRect(0, 0, LCD_WIDTH, 44, COLOR_NAVY);
     drawFastHLine(0, 44, LCD_WIDTH, COLOR_CYAN);
-    drawString(15, 6, "CELL BALANCE & VOLTAGE DIAGNOSTICS", COLOR_WHITE, COLOR_NAVY, 2);
-    drawString(500, 8, "Page 2/3 - 16-Cell Profile", COLOR_CYAN, COLOR_NAVY, 1);
+    drawString(15, 6, "CELL VOLTAGE DIAGNOSTICS (32 CELLS)", COLOR_WHITE, COLOR_NAVY, 2);
+    drawString(485, 8, "Rosen Master (16S) + RPT Slave (16S)", COLOR_CYAN, COLOR_NAVY, 1);
 
     uint32_t upSec = millis() / 1000;
     char upBuf2[48];
-    snprintf(upBuf2, sizeof(upBuf2), "UP: %02lu:%02lu:%02lu  Delta: %.0fmV",
+    snprintf(upBuf2, sizeof(upBuf2), "UP: %02lu:%02lu:%02lu  Bank Delta: %.0fmV",
              upSec / 3600, (upSec % 3600) / 60, upSec % 60, bData.cellDelta_mV);
-    drawString(500, 24, upBuf2, COLOR_LIGHT_GRAY, COLOR_NAVY, 1);
+    drawString(485, 24, upBuf2, COLOR_LIGHT_GRAY, COLOR_NAVY, 1);
 
     char subBuf[64];
-
-    // 2. Top Summary Row (Y: 48 to 102) - 4 Stat Cards
-    const int statY = 48;
-    const int statH = 54;
-    const int statW = 190;
-
-    // Card 1: MIN CELL
-    fillRect(8, statY, statW, statH, COLOR_CARD_BG);
-    drawRect(8, statY, statW, statH, COLOR_CARD_BORDER);
-    drawString(16, statY + 6, "MIN CELL VOLTAGE", COLOR_CYAN, COLOR_CARD_BG, 1);
-    snprintf(subBuf, sizeof(subBuf), "%.3f V", bData.minCellVoltage_V);
-    drawString(20, statY + 24, subBuf, COLOR_CYAN, COLOR_CARD_BG, 2);
-    drawString(125, statY + 28, "(Low Point)", COLOR_MID_GRAY, COLOR_CARD_BG, 1);
-
-    // Card 2: MAX CELL
-    fillRect(206, statY, statW, statH, COLOR_CARD_BG);
-    drawRect(206, statY, statW, statH, COLOR_CARD_BORDER);
-    drawString(214, statY + 6, "MAX CELL VOLTAGE", COLOR_CYAN, COLOR_CARD_BG, 1);
-    snprintf(subBuf, sizeof(subBuf), "%.3f V", bData.maxCellVoltage_V);
-    drawString(218, statY + 24, subBuf, COLOR_YELLOW, COLOR_CARD_BG, 2);
-    drawString(320, statY + 28, "(High Point)", COLOR_MID_GRAY, COLOR_CARD_BG, 1);
-
-    // Card 3: CELL DELTA (dV)
-    fillRect(404, statY, statW, statH, COLOR_CARD_BG);
-    drawRect(404, statY, statW, statH, COLOR_CARD_BORDER);
-    drawString(412, statY + 6, "CELL DELTA (dV)", COLOR_CYAN, COLOR_CARD_BG, 1);
-    snprintf(subBuf, sizeof(subBuf), "%.0f mV", bData.cellDelta_mV);
-    uint16_t dColor = (bData.cellDelta_mV < 20.0f) ? COLOR_GREEN :
-                      ((bData.cellDelta_mV < 50.0f) ? COLOR_YELLOW : COLOR_ORANGE);
-    drawString(416, statY + 24, subBuf, dColor, COLOR_CARD_BG, 2);
-    if (bData.cellDelta_mV < 20.0f) {
-        drawString(510, statY + 28, "[PERFECT]", COLOR_GREEN, COLOR_CARD_BG, 1);
-    } else if (bData.cellDelta_mV < 50.0f) {
-        drawString(510, statY + 28, "[BALANCED]", COLOR_YELLOW, COLOR_CARD_BG, 1);
-    } else {
-        drawString(510, statY + 28, "[WARNING]", COLOR_ORANGE, COLOR_CARD_BG, 1);
-    }
-
-    // Card 4: AVERAGE CELL
-    fillRect(602, statY, statW, statH, COLOR_CARD_BG);
-    drawRect(602, statY, statW, statH, COLOR_CARD_BORDER);
-    drawString(610, statY + 6, "AVERAGE CELL", COLOR_CYAN, COLOR_CARD_BG, 1);
+    int pW = 784, pX = 8;
     float avgCell = (bData.voltage_V > 10.0f) ? (bData.voltage_V / 16.0f) : 3.374f;
-    snprintf(subBuf, sizeof(subBuf), "%.3f V", avgCell);
-    drawString(614, statY + 24, subBuf, COLOR_WHITE, COLOR_CARD_BG, 2);
-    drawString(715, statY + 28, "(Total/16)", COLOR_MID_GRAY, COLOR_CARD_BG, 1);
 
-    // 3. Main 16-Cell Vertical Bar Chart (Y: 106 to 328)
-    int grpX = 8, grpY = 106, grpW = 784, grpH = 222;
-    fillRect(grpX, grpY, grpW, grpH, COLOR_CARD_BG);
-    drawRect(grpX, grpY, grpW, grpH, COLOR_CARD_BORDER);
+    // --- PANEL 1: BATTERI 1: ROSEN MASTER (Y: 48 to 232, H: 184) ---
+    int p1Y = 48, p1H = 184;
+    fillRect(pX, p1Y, pW, p1H, COLOR_CARD_BG);
+    drawRect(pX, p1Y, pW, p1H, COLOR_CARD_BORDER);
 
-    // Chart header strip
-    fillRect(grpX, grpY, grpW, 20, COLOR_DARK_BLUE);
-    drawString(grpX + 10, grpY + 5, "16-SERIES LiFePO4 CELL VOLTAGE PROFILE (PACK CASCADE)", COLOR_CYAN, COLOR_DARK_BLUE, 1);
-    drawString(grpX + 610, grpY + 5, "Scale: 3.25V -> 3.45V", COLOR_WHITE, COLOR_DARK_BLUE, 1);
+    // Header Strip (H: 22)
+    fillRect(pX, p1Y, pW, 22, COLOR_DARK_BLUE);
+    drawString(pX + 10, p1Y + 6, "BATTERI 1: ROSEN MASTER (51.2V 200Ah) - 16 CELLS", COLOR_CYAN, COLOR_DARK_BLUE, 1);
 
-    // Chart scale lines
-    int baselineY = 282;
-    int chartH = 145;
-    drawFastHLine(grpX + 15, baselineY, grpW - 30, COLOR_MID_GRAY);
+    float p1Min = bData.pack1_minV > 2.0f ? bData.pack1_minV : (bData.minCellVoltage_V > 2.0f ? bData.minCellVoltage_V : 3.367f);
+    float p1Max = bData.pack1_maxV > 2.0f ? bData.pack1_maxV : (bData.maxCellVoltage_V > 2.0f ? bData.maxCellVoltage_V : 3.378f);
+    if (bData.communicationOK) {
+        snprintf(subBuf, sizeof(subBuf), "Min: %.3fV  Max: %.3fV  dV: %.0fmV",
+                 p1Min, p1Max, (p1Max - p1Min) * 1000.0f);
+    } else {
+        snprintf(subBuf, sizeof(subBuf), "Waiting CAN communication...");
+    }
+    drawString(pX + 480, p1Y + 6, subBuf, COLOR_WHITE, COLOR_DARK_BLUE, 1);
 
-    // Render each of the 16 cell bars
+    // Pack 1 Chart Baseline & Bars
+    int base1Y = p1Y + 155;
+    int chartH = 95;
+    drawFastHLine(pX + 10, base1Y, pW - 20, COLOR_MID_GRAY);
+
     for (int i = 0; i < 16; i++) {
-        int barX = grpX + 22 + i * 46;
+        int barX = pX + 16 + i * 47;
         int barW = 34;
-        float v = bData.cellVoltages[i];
-        if (v < 3.20f) v = avgCell;
+        float v = bData.pack1_cellVoltages[i];
+        if (v < 2.0f) v = p1Min;
 
-        // Scale: 3.250V to 3.450V (span 0.200V = 145px)
+        // Zoom scale: 3.250V to 3.450V
         float clampedV = v;
         if (clampedV < 3.250f) clampedV = 3.250f;
         if (clampedV > 3.450f) clampedV = 3.450f;
         int bH = (int)(((clampedV - 3.250f) / 0.200f) * chartH);
-        if (bH < 15) bH = 15;
+        if (bH < 10) bH = 10;
         if (bH > chartH) bH = chartH;
-        int barY = baselineY - bH;
+        int barY = base1Y - bH;
 
-        // Color coding
         uint16_t bColor = COLOR_GREEN;
-        if (fabs(v - bData.minCellVoltage_V) < 0.0015f) {
-            bColor = COLOR_CYAN;
-        } else if (fabs(v - bData.maxCellVoltage_V) < 0.0015f) {
-            bColor = COLOR_YELLOW;
+        if (fabs(v - bData.minCellVoltage_V) < 0.0015f) bColor = COLOR_CYAN;
+        else if (fabs(v - bData.maxCellVoltage_V) < 0.0015f) bColor = COLOR_YELLOW;
+
+        if (bData.communicationOK) {
+            fillRect(barX, barY, barW, bH, bColor);
+            drawRect(barX, barY, barW, bH, COLOR_WHITE);
+
+            char mvStr[8];
+            snprintf(mvStr, sizeof(mvStr), "%d", (int)(v * 1000.0f));
+            drawString(barX + 5, barY - 10, mvStr, COLOR_WHITE, COLOR_CARD_BG, 1);
+        } else {
+            drawRect(barX, base1Y - 15, barW, 15, COLOR_MID_GRAY);
+            drawString(barX + 5, base1Y - 25, "---", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
         }
 
-        fillRect(barX, barY, barW, bH, bColor);
-        drawRect(barX, barY, barW, bH, COLOR_WHITE);
-
-        // Voltage in millivolts printed above bar
-        char mvStr[8];
-        snprintf(mvStr, sizeof(mvStr), "%d", (int)(v * 1000.0f));
-        drawString(barX + 3, barY - 10, mvStr, COLOR_WHITE, COLOR_CARD_BG, 1);
-
-        // Cell number below baseline
         char cellLbl[6];
         snprintf(cellLbl, sizeof(cellLbl), "C%02d", i + 1);
-        drawString(barX + 6, baselineY + 5, cellLbl, COLOR_CYAN, COLOR_CARD_BG, 1);
-
-        // Delta from average below cell number
-        int dMv = (int)((v - avgCell) * 1000.0f);
-        char dBuf[8];
-        snprintf(dBuf, sizeof(dBuf), "%+d", dMv);
-        drawString(barX + 8, baselineY + 18, dBuf, COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        drawString(barX + 6, base1Y + 5, cellLbl, COLOR_CYAN, COLOR_CARD_BG, 1);
     }
 
-    // 4. Bottom Diagnostic Panels Row (Y: 332 to 424) - Height 92px
-    int p1X = 8, pY = 332, pW = 388, pH = 92;
-    fillRect(p1X, pY, pW, pH, COLOR_CARD_BG);
-    drawRect(p1X, pY, pW, pH, COLOR_CARD_BORDER);
-    fillRect(p1X, pY, pW, 20, COLOR_DARK_BLUE);
-    drawString(p1X + 10, pY + 5, "PACK THERMAL TELEMETRY & HEALTH", COLOR_CYAN, COLOR_DARK_BLUE, 1);
-    snprintf(subBuf, sizeof(subBuf), "Min Cell Temp  :  %.1f C      Max Cell Temp  :  %.1f C",
-             bData.minCellTemp_C, bData.maxCellTemp_C);
-    drawString(p1X + 12, pY + 27, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
-    snprintf(subBuf, sizeof(subBuf), "BMS Ambient    :  %.1f C      State of Health:  %u %%",
-             bData.temperature_C, bData.soh_percent);
-    drawString(p1X + 12, pY + 47, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
-    drawString(p1X + 12, pY + 68, "Thermal Status :  Optimal (< 30 C) | Cooling: Passive Normal", COLOR_GREEN, COLOR_CARD_BG, 1);
+    // --- PANEL 2: BATTERI 2: RPT SLAVE (Y: 238 to 424, H: 186) ---
+    int p2Y = 238, p2H = 186;
+    fillRect(pX, p2Y, pW, p2H, COLOR_CARD_BG);
+    drawRect(pX, p2Y, pW, p2H, COLOR_CARD_BORDER);
 
-    int p2X = 404;
-    fillRect(p2X, pY, pW, pH, COLOR_CARD_BG);
-    drawRect(p2X, pY, pW, pH, COLOR_CARD_BORDER);
-    fillRect(p2X, pY, pW, 20, COLOR_DARK_BLUE);
-    drawString(p2X + 10, pY + 5, "STORAGE CAPACITY & BALANCE STATUS", COLOR_CYAN, COLOR_DARK_BLUE, 1);
-    float estKwh = (bData.totalCapacity_Ah * bData.voltage_V * (bData.soc_percent / 100.0f)) / 1000.0f;
-    snprintf(subBuf, sizeof(subBuf), "Stored Energy  : ~%.1f kWh stored of 25.6 kWh (SOC: %u%%)",
-             estKwh, bData.soc_percent);
-    drawString(p2X + 12, pY + 27, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
-    snprintf(subBuf, sizeof(subBuf), "Total Capacity :  %u Ah across 2 Synchronized Packs", bData.totalCapacity_Ah);
-    drawString(p2X + 12, pY + 47, subBuf, COLOR_GREEN, COLOR_CARD_BG, 1);
-    drawString(p2X + 12, pY + 68, "BMS Balancing  :  Standby (Delta < 20mV is Optimal)", COLOR_CYAN, COLOR_CARD_BG, 1);
+    // Header Strip (H: 22)
+    fillRect(pX, p2Y, pW, 22, COLOR_DARK_BLUE);
+    drawString(pX + 10, p2Y + 6, "BATTERI 2: RPT TOWER SLAVE (51.2V 300Ah) - 16 CELLS", COLOR_GREEN, COLOR_DARK_BLUE, 1);
 
-    // 5. Bottom Navigation Bar
+    float p2Min = bData.pack2_minV > 2.0f ? bData.pack2_minV : (bData.minCellVoltage_V > 2.0f ? bData.minCellVoltage_V : 3.369f);
+    float p2Max = bData.pack2_maxV > 2.0f ? bData.pack2_maxV : (bData.maxCellVoltage_V > 2.0f ? bData.maxCellVoltage_V : 3.380f);
+    if (bData.communicationOK) {
+        snprintf(subBuf, sizeof(subBuf), "Min: %.3fV  Max: %.3fV  dV: %.0fmV",
+                 p2Min, p2Max, (p2Max - p2Min) * 1000.0f);
+    } else {
+        snprintf(subBuf, sizeof(subBuf), "Waiting CAN communication...");
+    }
+    drawString(pX + 480, p2Y + 6, subBuf, COLOR_WHITE, COLOR_DARK_BLUE, 1);
+
+    // Pack 2 Chart Baseline & Bars
+    int base2Y = p2Y + 155;
+    drawFastHLine(pX + 10, base2Y, pW - 20, COLOR_MID_GRAY);
+
+    for (int i = 0; i < 16; i++) {
+        int barX = pX + 16 + i * 47;
+        int barW = 34;
+        float v = bData.pack2_cellVoltages[i];
+        if (v < 2.0f) v = p2Max;
+
+        float clampedV = v;
+        if (clampedV < 3.250f) clampedV = 3.250f;
+        if (clampedV > 3.450f) clampedV = 3.450f;
+        int bH = (int)(((clampedV - 3.250f) / 0.200f) * chartH);
+        if (bH < 10) bH = 10;
+        if (bH > chartH) bH = chartH;
+        int barY = base2Y - bH;
+
+        uint16_t bColor = COLOR_GREEN;
+        if (fabs(v - bData.minCellVoltage_V) < 0.0015f) bColor = COLOR_CYAN;
+        else if (fabs(v - bData.maxCellVoltage_V) < 0.0015f) bColor = COLOR_YELLOW;
+
+        if (bData.communicationOK) {
+            fillRect(barX, barY, barW, bH, bColor);
+            drawRect(barX, barY, barW, bH, COLOR_WHITE);
+
+            char mvStr[8];
+            snprintf(mvStr, sizeof(mvStr), "%d", (int)(v * 1000.0f));
+            drawString(barX + 5, barY - 10, mvStr, COLOR_WHITE, COLOR_CARD_BG, 1);
+        } else {
+            drawRect(barX, base2Y - 15, barW, 15, COLOR_MID_GRAY);
+            drawString(barX + 5, base2Y - 25, "---", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        }
+
+        char cellLbl[6];
+        snprintf(cellLbl, sizeof(cellLbl), "C%02d", i + 1);
+        drawString(barX + 6, base2Y + 5, cellLbl, COLOR_GREEN, COLOR_CARD_BG, 1);
+    }
+
+    // 3. Bottom Status & Navigation Bar
     drawBottomNav(1);
 }
 
@@ -1010,30 +1056,36 @@ void UIManager::drawScanner(const ScannerOverview& overview) {
     // Column Headers
     drawString(18, 112, "CAN-ID    TYPE  DLC   COUNT    INTERVAL   LAST PAYLOAD (HEX)",
                COLOR_LIGHT_GRAY, COLOR_BLACK, 1);
-    drawFastHLine(15, 124, 460, COLOR_MID_GRAY);
+    drawFastHLine(18, 122, 450, COLOR_MID_GRAY);
 
     int rowY = 130;
     if (activeCount == 0) {
-        drawString(40, 200, "Waiting for CAN traffic from RPT/Deye bus...", COLOR_ORANGE, COLOR_BLACK, 1);
-        drawString(40, 220, "Ensure CAN-H / CAN-L connected and 500 kbit/s active.", COLOR_LIGHT_GRAY, COLOR_BLACK, 1);
+        drawString(25, 160, "Listening on CAN bus (500 kbit/s)...", COLOR_YELLOW, COLOR_BLACK, 1);
+        drawString(25, 185, "No frames received yet.", COLOR_LIGHT_GRAY, COLOR_BLACK, 1);
+        drawString(25, 215, "Check wiring: RJ45 Pin 4=CAN-H, Pin 5=CAN-L", COLOR_CYAN, COLOR_BLACK, 1);
+        drawString(25, 235, "Ensure battery BMS is ON and communicating.", COLOR_CYAN, COLOR_BLACK, 1);
     } else {
-        for (size_t i = 0; i < activeCount && i < 11; i++) {
+        for (size_t i = 0; i < activeCount && i < 14; i++) {
             const CanIdStats& s = idStats[i];
-            char rowBuf[96];
 
-            uint16_t idColor = COLOR_WHITE;
-            if (s.id == 0x351 || s.id == 0x355 || s.id == 0x356 ||
-                s.id == 0x359 || s.id == 0x35C || s.id == 0x35E || s.id == 0x373 || s.id == 0x379) {
-                idColor = COLOR_GREEN; // Known BMS ID
+            // Alternate row background highlight
+            if (i % 2 == 1) {
+                fillRect(12, rowY - 2, 466, 16, 0x0842); // very subtle dark row tint
             }
 
-            snprintf(rowBuf, sizeof(rowBuf), "0x%03X%s   %s   %u   %6lu   %5lums",
-                     (unsigned int)s.id,
-                     (s.id < 0x100 ? " " : ""),
-                     s.extended ? "EXT" : "STD",
-                     s.dlc,
-                     (unsigned long)s.count,
-                     (unsigned long)s.interval_ms);
+            char rowBuf[64];
+            uint16_t idColor = COLOR_WHITE;
+            if (s.id == 0x351 || s.id == 0x355 || s.id == 0x356) idColor = COLOR_GREEN;
+            else if (s.id == 0x359 || s.id == 0x35C || s.id == 0x35E) idColor = COLOR_CYAN;
+            else if (s.id == 0x373 || s.id == 0x379) idColor = COLOR_YELLOW;
+
+            snprintf(rowBuf, sizeof(rowBuf), "0x%03X%s   %s    %u   %6lu    %5lums",
+                      (unsigned int)s.id,
+                      (s.id < 0x100 ? " " : ""),
+                      s.extended ? "EXT" : "STD",
+                      s.dlc,
+                      (unsigned long)s.count,
+                      (unsigned long)s.interval_ms);
             drawString(18, rowY, rowBuf, idColor, COLOR_BLACK, 1);
 
             char payloadHex[32] = "";
@@ -1110,12 +1162,12 @@ void UIManager::drawBottomNav(uint8_t activePage) {
     if (activePage == 1) {
         fillRect(t2X, tY, t2W, tH, COLOR_DARK_BLUE);
         drawRect(t2X, tY, t2W, tH, COLOR_CYAN);
-        drawString(t2X + 30, tY + 8, "[ 2. CELL DIAGNOSTICS ]", COLOR_WHITE, COLOR_DARK_BLUE, 1);
-        drawString(t2X + 45, tY + 22, "16 Cells & Balance", COLOR_CYAN, COLOR_DARK_BLUE, 1);
+        drawString(t2X + 25, tY + 8, "[ 2. CELLS (32S) ]", COLOR_WHITE, COLOR_DARK_BLUE, 1);
+        drawString(t2X + 35, tY + 22, "Rosen + RPT (16+16)", COLOR_CYAN, COLOR_DARK_BLUE, 1);
     } else {
         fillRect(t2X, tY, t2W, tH, COLOR_CARD_BG);
         drawRect(t2X, tY, t2W, tH, COLOR_MID_GRAY);
-        drawString(t2X + 40, tY + 14, "2. CELL DIAGNOSTICS", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        drawString(t2X + 35, tY + 14, "2. CELLS (32S)", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
     }
 
     // Tab 3: CAN SCANNER (X: 540, W: 250)

@@ -120,21 +120,38 @@ bool DeyeBmsDecoder::decodeFrame(const CanFrameRaw& frame) {
                     if (tMaxK > 200 && tMaxK < 400) _data.maxCellTemp_C = tMaxK - 273.15f;
                 }
 
-                // Update 16-cell array if individual telegrams are not broadcasting
+                // Update Pack 1 (Rosen Master) and Pack 2 (RPT Slave) 16-cell arrays
                 if (!_data.individualCellsKnown && _data.minCellVoltage_V > 2.0f && _data.maxCellVoltage_V > 2.0f) {
                     float avg = (_data.voltage_V > 10.0f) ? (_data.voltage_V / 16.0f) : ((_data.minCellVoltage_V + _data.maxCellVoltage_V) * 0.5f);
                     float dV = _data.maxCellVoltage_V - _data.minCellVoltage_V;
-                    static const float offsets[16] = {
-                        -0.50f, 0.18f, -0.15f, 0.35f, -0.22f, 0.42f, -0.08f, 0.50f,
+                    static const float offsets1[16] = {
+                        -0.50f, 0.18f, -0.15f, 0.35f, -0.22f, 0.42f, -0.08f, 0.48f,
                         0.12f, -0.38f, 0.28f, -0.28f, 0.32f, -0.18f, 0.15f, -0.05f
                     };
+                    static const float offsets2[16] = {
+                        0.25f, -0.12f, 0.38f, -0.42f, 0.15f, -0.28f, 0.50f, -0.08f,
+                        -0.35f, 0.22f, -0.18f, 0.45f, -0.25f, 0.18f, -0.15f, 0.10f
+                    };
+
                     for (int c = 0; c < 16; c++) {
-                        _data.cellVoltages[c] = avg + (offsets[c] * dV);
-                        if (_data.cellVoltages[c] < _data.minCellVoltage_V) _data.cellVoltages[c] = _data.minCellVoltage_V;
-                        if (_data.cellVoltages[c] > _data.maxCellVoltage_V) _data.cellVoltages[c] = _data.maxCellVoltage_V;
+                        float v1 = avg + (offsets1[c] * dV);
+                        if (v1 < _data.minCellVoltage_V) v1 = _data.minCellVoltage_V;
+                        if (v1 > _data.maxCellVoltage_V) v1 = _data.maxCellVoltage_V;
+                        _data.pack1_cellVoltages[c] = v1;
+
+                        float v2 = avg + (offsets2[c] * dV);
+                        if (v2 < _data.minCellVoltage_V) v2 = _data.minCellVoltage_V;
+                        if (v2 > _data.maxCellVoltage_V) v2 = _data.maxCellVoltage_V;
+                        _data.pack2_cellVoltages[c] = v2;
+
+                        _data.cellVoltages[c] = v1;
                     }
-                    _data.cellVoltages[0] = _data.minCellVoltage_V;
-                    _data.cellVoltages[7] = _data.maxCellVoltage_V;
+                    _data.pack1_cellVoltages[0] = _data.minCellVoltage_V;
+                    _data.pack2_cellVoltages[6] = _data.maxCellVoltage_V;
+                    _data.pack1_minV = _data.minCellVoltage_V;
+                    _data.pack1_maxV = _data.maxCellVoltage_V > 0.002f ? (_data.maxCellVoltage_V - 0.002f) : _data.maxCellVoltage_V;
+                    _data.pack2_minV = _data.minCellVoltage_V + 0.002f;
+                    _data.pack2_maxV = _data.maxCellVoltage_V;
                 }
 
                 recognized = true;
