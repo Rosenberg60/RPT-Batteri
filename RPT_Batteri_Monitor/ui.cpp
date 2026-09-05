@@ -343,8 +343,12 @@ void UIManager::uiTask() {
 // -----------------------------------------------------------------------------
 void UIManager::fillScreen(uint16_t color) {
     if (!_framebuffer) return;
-    for (int i = 0; i < LCD_WIDTH * LCD_HEIGHT; i++) {
-        _framebuffer[i] = color;
+    if (color == 0) {
+        memset(_framebuffer, 0, LCD_WIDTH * LCD_HEIGHT * sizeof(uint16_t));
+    } else {
+        for (int i = 0; i < LCD_WIDTH * LCD_HEIGHT; i++) {
+            _framebuffer[i] = color;
+        }
     }
 }
 
@@ -492,6 +496,8 @@ void UIManager::checkTouch() {
 // Phase 2: Graphical Battery Storage Dashboard
 // -----------------------------------------------------------------------------
 void UIManager::drawDashboard(const BatteryData& bData, const ScannerOverview& overview) {
+    fillScreen(COLOR_BLACK);
+
     // 1. Top Header Bar (Y: 0 to 44)
     fillRect(0, 0, LCD_WIDTH, 44, COLOR_NAVY);
     drawFastHLine(0, 44, LCD_WIDTH, COLOR_CYAN);
@@ -777,6 +783,8 @@ void UIManager::drawDashboard(const BatteryData& bData, const ScannerOverview& o
 // Phase 2: Page 2 - Cell Balance & Voltage Diagnostics (16-Cell Profile)
 // -----------------------------------------------------------------------------
 void UIManager::drawCellDiagnostics(const BatteryData& bData, const ScannerOverview& overview) {
+    fillScreen(COLOR_BLACK);
+
     // 1. Top Header Bar (Y: 0 to 44)
     fillRect(0, 0, LCD_WIDTH, 44, COLOR_NAVY);
     drawFastHLine(0, 44, LCD_WIDTH, COLOR_CYAN);
@@ -931,6 +939,8 @@ void UIManager::drawCellDiagnostics(const BatteryData& bData, const ScannerOverv
 // Phase 1: Raw CAN Bus Scanner View
 // -----------------------------------------------------------------------------
 void UIManager::drawScanner(const ScannerOverview& overview) {
+    fillScreen(COLOR_BLACK);
+
     CanIdStats idStats[14];
     size_t activeCount = CanReceiver::getInstance().getIdStatistics(idStats, 14);
 
