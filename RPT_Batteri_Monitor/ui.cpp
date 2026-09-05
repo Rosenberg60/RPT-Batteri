@@ -496,7 +496,19 @@ void UIManager::drawDashboard(const BatteryData& bData, const ScannerOverview& o
     fillRect(0, 0, LCD_WIDTH, 44, COLOR_NAVY);
     drawFastHLine(0, 44, LCD_WIDTH, COLOR_CYAN);
     drawString(15, 6, "BATTERY STORAGE DASHBOARD", COLOR_WHITE, COLOR_NAVY, 2);
-    drawString(370, 10, "Deye & Rosen / RPT Bank", COLOR_CYAN, COLOR_NAVY, 1);
+    drawString(345, 8, "Deye & Rosen / RPT Bank", COLOR_CYAN, COLOR_NAVY, 1);
+
+    uint32_t upSec = millis() / 1000;
+    char upBuf[48];
+    if (bData.communicationOK && bData.lastUpdate_ms > 0) {
+        uint32_t ageMs = (millis() >= bData.lastUpdate_ms) ? (millis() - bData.lastUpdate_ms) : 0;
+        snprintf(upBuf, sizeof(upBuf), "UP: %02lu:%02lu:%02lu  RX: %lums ago",
+                 upSec / 3600, (upSec % 3600) / 60, upSec % 60, (unsigned long)ageMs);
+    } else {
+        snprintf(upBuf, sizeof(upBuf), "UP: %02lu:%02lu:%02lu  RX: Waiting...",
+                 upSec / 3600, (upSec % 3600) / 60, upSec % 60);
+    }
+    drawString(345, 24, upBuf, COLOR_LIGHT_GRAY, COLOR_NAVY, 1);
 
     // Header Right Badge: BMS Online / Modules
     if (bData.communicationOK) {
@@ -769,7 +781,13 @@ void UIManager::drawCellDiagnostics(const BatteryData& bData, const ScannerOverv
     fillRect(0, 0, LCD_WIDTH, 44, COLOR_NAVY);
     drawFastHLine(0, 44, LCD_WIDTH, COLOR_CYAN);
     drawString(15, 6, "CELL BALANCE & VOLTAGE DIAGNOSTICS", COLOR_WHITE, COLOR_NAVY, 2);
-    drawString(520, 10, "Page 2/3 - 16-Series Profile", COLOR_CYAN, COLOR_NAVY, 1);
+    drawString(500, 8, "Page 2/3 - 16-Cell Profile", COLOR_CYAN, COLOR_NAVY, 1);
+
+    uint32_t upSec = millis() / 1000;
+    char upBuf2[48];
+    snprintf(upBuf2, sizeof(upBuf2), "UP: %02lu:%02lu:%02lu  Delta: %.0fmV",
+             upSec / 3600, (upSec % 3600) / 60, upSec % 60, bData.cellDelta_mV);
+    drawString(500, 24, upBuf2, COLOR_LIGHT_GRAY, COLOR_NAVY, 1);
 
     char subBuf[64];
 
@@ -923,7 +941,15 @@ void UIManager::drawScanner(const ScannerOverview& overview) {
     fillRect(0, 0, LCD_WIDTH, 44, COLOR_NAVY);
     drawFastHLine(0, 44, LCD_WIDTH, COLOR_CYAN);
     drawString(15, 6, "RPT & ROSEN CAN SCANNER", COLOR_WHITE, COLOR_NAVY, 2);
-    drawString(360, 10, "Waveshare ESP32-S3-Touch-LCD-7 (Rev 1.2)", COLOR_CYAN, COLOR_NAVY, 1);
+    drawString(340, 8, "Waveshare ESP32-S3 (Rev 1.2)", COLOR_CYAN, COLOR_NAVY, 1);
+
+    uint32_t upSec = millis() / 1000;
+    char upBuf3[48];
+    uint32_t ageMs3 = (overview.last_packet_time_ms > 0 && millis() >= overview.last_packet_time_ms)
+                          ? (millis() - overview.last_packet_time_ms) : 0;
+    snprintf(upBuf3, sizeof(upBuf3), "UP: %02lu:%02lu:%02lu  RX: %lums ago",
+             upSec / 3600, (upSec % 3600) / 60, upSec % 60, (unsigned long)ageMs3);
+    drawString(340, 24, upBuf3, COLOR_LIGHT_GRAY, COLOR_NAVY, 1);
 
     // CAN Status Badge
     char canStatusStr[40];

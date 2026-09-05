@@ -104,7 +104,7 @@ void setup() {
     delay(200);
 
     LOG_PRINTLN("\n\n================================================================================");
-    LOG_PRINTLN(">>> ESP32-S3 RPT BATTERY MONITOR - TIMESTAMP: 2026-09-04 16:15:00 (v1.0.5) <<<");
+    LOG_PRINTF( ">>> ESP32-S3 RPT BATTERY MONITOR - COMPILED: %s %s (v1.1.0) <<<\n", __DATE__, __TIME__);
     printStartupBanner();
 
     // 2. Initialize UI & Board Hardware
