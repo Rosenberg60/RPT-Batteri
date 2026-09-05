@@ -1,29 +1,43 @@
-# RPT-Batterimonitor med Waveshare ESP32-S3-Touch-LCD-7 (Rev 1.2)
+# RPT & Rosen Batterimonitor med Waveshare ESP32-S3-Touch-LCD-7 (Rev 1.2)
 
-Dette projekt er en dedikeret CAN-bus monitor og analysator for et **RPT Tower LiFePO₄-batteri (RPES-51.2V300AH, 15,36 kWh)**.
+Dette projekt er en dedikeret CAN-bus monitor, telemetrilogger og web-dashboard for et **51,2V LiFePO₄ hybridsystem: Rosen 200Ah Master + RPT Tower 300Ah (Samlet 501 Ah / 25,6 kWh)** tilsluttet en **Deye SUN-12K-SG05LP3-EU** hybridinverter.
 
-Systemet kører på en **Waveshare ESP32-S3-Touch-LCD-7 (Rev 1.2)** med 7,0" IPS RGB-touchskærm (800 × 480).
-
-Projektet er opdelt i tre faser:
-* **Fase 1 (Nuværende status – Fuldført & Verificeret)**: Komplet CAN-scanner, der opsamler og analyserer alle CAN-telegrammer punkt-til-punkt fra batteriet, viser statistik og live-trafik på 7" skærmen/serielporten og logger data til MicroSD-kort i CSV-format.
-* **Fase 2 (Afventer rå log)**: Dekodning af batteriparametre (Spænding, Strøm, SOC, SOH, Temperatur, Ladegrænser, Alarmer).
-* **Fase 3**: Fuld grafisk brugerflade (LVGL / touch-dashboard med alarmer, grafer og historik).
+Systemet kører på en **Waveshare ESP32-S3-Touch-LCD-7 (Rev 1.2)** med 7,0" IPS RGB-skærm (800 × 480 capacitive touch), MicroSD-blackbox-logger og indbygget WiFi-webserver.
 
 ---
 
-## 1. Systemarkitektur & Forbindelser
+## 1. Systemstatus & Funktioner
 
-Inverteren (**Deye SUN-12K-SG05LP3-EU**) og batteriet (**RPT Tower 51.2V 300Ah**) er forbundet via **RS485**. Denne forbindelse forbliver fuldstændig urørt.
+* **Multi-Side Touch Dashboard (800 × 480 IPS)**:
+  * **Side 1 (Hovedoversigt)**: Store hero-kort for **SOC (%)**, **Storage Power (kW)**, **Bank Spænding (V)** og **Total & Peak Strøm (A)** (med automatisk skalering for afladestrømme $> 100\text{ A}$). Statusfelter for Min/Max cellespænding, cell delta (mV), ladestatus, invertergrænser og intern 3,7V LiPo backup-batteristatus (`Lipo Bat: x.xV (xx%)`).
+  * **Side 2 (Cell Diagnostics 32S)**: Komplet 32-celle visning med 16S Rosen Master og 16S RPT Tower. Dynamisk farvekodning (grøn/gul/rød/blå) og flimmerfri differential-opdatering.
+  * **Side 3 (CAN Scanner)**: Real-tids tabel over alle modtagne CAN ID'er, frekvens, antal, payload og live frame-terminal.
+  * **Touch Styring**: Touch er eksklusivt afgrænset til de 3 navigationsknapper i bunden ($Y \ge 420$) for at forhindre utilsigtede sideskift.
+* **Integreret Web-Interface (WiFi)**:
+  * Responsivt web-dashboard tilgåeligt via `http://rpt-batteri.local` eller ESP32's IP-adresse.
+  * 4x forhøjede spændingssøjler for maksimal visualisering af cellebalance i 16S pack.
+  * REST API endpoints: `/api/data` og `/api/scanner` med JSON telemetri.
+* **Batteri Backup Monitor**:
+  * Analog måling af tilsluttet 3,7V LiPo-batteri via GPIO 4 (ADC) med SOC estimering.
+* **MicroSD Blackbox Logging**:
+  * Automatisk logning af samtlige rå CAN-rammer til MicroSD i standard CSV-format (`/can_log_XXX.csv`).
+* **Høj Stabilitet & Multi-Kerne Arkitektur**:
+  * Dedikerede FreeRTOS tasks på Kerne 0 (CAN + Logger + WebServer) og Kerne 1 (UI Display Rendering).
+  * Ikke-blokerende CAN queue drain, FreeRTOS mutexes i stedet for spinlocks, og beskyttelse mod Task Watchdog timeouts.
 
-Waveshare 7"-displayet forbindes direkte til batteriets **CAN-port** som en separat punkt-til-punkt forbindelse:
+---
+
+## 2. Systemarkitektur & Forbindelser
+
+Inverteren (**Deye SUN-12K-SG05LP3-EU**) og batterierne (**Rosen 200Ah Master** og **RPT Tower 300Ah**) kommunikerer via batteriets BMS CAN-bus:
 
 ```text
 +-----------------------------------------------------------------------------------------+
 |                                    SYSTEMOVERSIGT                                       |
 |                                                                                         |
-|   +-----------------------+              RS485              +-----------------------+   |
-|   |  Deye SUN-12K         |<===============================>|  RPT Tower Batteri    |   |
-|   |  Inverter             |   (Eksisterende bus, urørt)     |  51.2V 300Ah / 15kWh  |   |
+|   +-----------------------+              CAN Bus            +-----------------------+   |
+|   |  Deye SUN-12K         |<===============================>|  Rosen Master 200Ah   |   |
+|   |  Inverter             |   (Eksisterende bus)            |  + RPT Tower 300Ah    |   |
 |   +-----------------------+                                 +-----------+-----------+   |
 |                                                                         |               |
 |                                                     CAN-Port (RJ45)     |               |
@@ -39,119 +53,62 @@ Waveshare 7"-displayet forbindes direkte til batteriets **CAN-port** som en sepa
 
 ---
 
-## 2. Hardwareguide for Waveshare ESP32-S3-Touch-LCD-7 (Rev 1.2)
+## 3. Hardwareguide for Waveshare ESP32-S3-Touch-LCD-7 (Rev 1.2)
 
-### Fysisk placering af stik og jumpere (se foto i `docs/waveshare_7_board_rev1.2.jpg`):
+### Fysisk placering af stik og jumpere:
 
 1. **Bunden af printet (Hvide JST-PH2.0 stik fra venstre mod højre)**:
-   * `Battery` (2-ben): `-` (Venstre, GND), `+` (Højre, 3,7V Li-ion).
+   * `Battery` (2-ben): `-` (Venstre, GND), `+` (Højre, 3,7V LiPo/Li-ion).
    * `RS-485` (2-ben): `A`, `B`.
    * `I2C` (4-ben): **`VCC`**, **`GND`**, `SDA`, `SCL`.
    * `CAN` (2-ben): **`L`** (Venstre, CAN-L), **`H`** (Højre, CAN-H).
-   * `Sensor AD` (3-ben): `3V3`, `GND`, `AD`.
+   * `Sensor AD` (3-ben): `3V3`, `GND`, `AD` (GPIO 4 ADC).
 2. **Venstre side af printet (Gule jumpere)**:
    * Øverste gule jumper: `RS-485 120R / NC`.
-   * Nederste gule jumper: **`CAN 120R / NC`**. *(Skal sidde på `120R` – se nedenfor)*.
+   * Nederste gule jumper: **`CAN 120R / NC`** *(Skal sidde på `120R`)*.
 3. **Midt-højre på printet (Sort 3-bens jumper)**:
-   * Jumper mærket **`I2C 3V3 / 5V`**. *(Bruges til strømforsyning uden USB – se nedenfor)*.
+   * Jumper mærket **`I2C 3V3 / 5V`** *(Sættes på `5V` hvis kortet forsynes via I2C-stikket)*.
 4. **Toppen af printet**:
    * Venstre USB Type-C: `USB` (Native ESP32-S3 USB).
-   * Højre USB Type-C: `UART1` (Onboard CH343 USB-to-UART converter til programmering/seriel monitor).
+   * Højre USB Type-C: `UART1` (Onboard CH343 USB-to-UART programmeringsport).
    * MicroSD-kortlæser (TF-card).
 
 ---
 
-## 3. Strømforsyning (5,0 V DC) – Uden brug af USB-kabel
+## 4. CAN-forbindelse & Terminering
 
-Kortet skal forsynes med **5,0 V DC (±5%)** og trækker ca. 450–600 mA (op til 1,0 A ved fuld skærmbelysning).
-
-> [!CAUTION]
-> **Advarsel om højspænding**:
-> Batteriet leverer 51,2 V nominel (48–58,4 V DC). Forbind **aldrig** batterispænding direkte til kortet!
-> Monter altid en isoleret **DC/DC step-down konverter (40–60V ind $\rightarrow$ 5,0V 3A ud)** med en **1–2A DC-sikring** på batteriets pluspol.
-
-### Metoden til at forsyne kortet via skrueterminal / PH2.0 (uden USB):
-
-1. Flyt den sorte jumper mærket **`I2C 3V3 / 5V`** over på **`5V`**-positionen.
-   * Dette forbinder kortets interne 5V-strømskinne direkte til `VCC`-benet på det hvide I2C-stik.
-2. Forbind fra din 5V DC/DC-konverter til det hvide 4-bens **`I2C`**-stik i bunden:
-   * **+5,0 V DC** $\rightarrow$ Forbindes til **`VCC`** (Pin 1, yderst til venstre).
-   * **GND (Minus)** $\rightarrow$ Forbindes til **`GND`** (Pin 2, nr. to fra venstre).
-   * *`SDA` og `SCL` efterlades tomme.*
-
-*(Alternativt kan anvendes et vinklet industrielt USB-C "pigtail" kabel med afisolerede ender direkte i DC/DC-konverteren).*
-
----
-
-## 4. CAN-forbindelse & 120 Ω Bus-terminering
-
-Da der er tale om et punkt-til-punkt kabel mellem batteri og Waveshare:
-
-### Kabelforbindelse (RJ45 til 2-bens CAN-stik):
-Fra et standard netværkskabel forbundet til RPT-batteriets CAN-port:
+Fra et standard RJ45 netværkskabel forbundet til batteriets CAN-port:
 * **Pin 4 (Blå leder)** $\rightarrow$ Forbindes til **`H`** (CAN-H) på Waveshare CAN-stikket.
 * **Pin 5 (Blå/Hvid leder)** $\rightarrow$ Forbindes til **`L`** (CAN-L) på Waveshare CAN-stikket.
-
-### 120 Ω Terminering:
-* RPT-batteriets CAN-port har en intern 120 Ω modstand i batterienden.
-* Waveshare 7"-kortet skal have 120 Ω i displayenden for at opnå de standardiserede **60 Ω samlet modstand**.
-* **Status**: Den nederste gule jumper mærket **`CAN 120R / NC`** sidder allerede i position **`120R`** på dit kort. Den er hermed korrekt konfigureret fra fabrikken.
-
-### Hardware ACK:
-Da batteriet sender som eneste anden node på linjen, kræver CAN-standarden (ISO 11898) en kvitteringsbit (ACK). Firmwaren er konfigureret med `BOARD_CAN_POINT_TO_POINT = true`:
-* ESP32 TWAI-hardwaren kvitterer automatisk modtagne pakker med den nødvendige ACK-bit.
-* Firmwaren sender **0 datarammer** ud på bussen, så scanneren forbliver 100% passiv.
+* Jumperen **`CAN 120R / NC`** skal sidde i **`120R`** position.
 
 ---
 
 ## 5. Softwarearkitektur
 
-Projektet er fuldt opbygget i `c:\MIRO Github repos\RPT Batteri\`:
+Kildekoden er struktureret modulært i `RPT_Batteri_Monitor/`:
 
 ```text
 ├── platformio.ini              # PlatformIO konfiguration (bygger direkte fra sketch-mappen)
-├── RPT_Batteri_Monitor/        # [Arduino Sketch Mappe] - Åbnes direkte i Arduino IDE
-│   ├── RPT_Batteri_Monitor.ino # Hoved-sketch (setup & loop)
-│   ├── board_config.h          # Hardwarepins, I2C, SPI, CAN (TX=20, RX=19), CH422G
-│   ├── battery_data.h          # Datastrukturer for CAN-rammer, ID-statistik og batteridata
-│   ├── can_receiver.h          # TWAI driver header
-│   ├── can_receiver.cpp        # Alert-drevet CAN-modtagelse uden malloc i modtagestien
-│   ├── sd_logger.h             # MicroSD logger header
-│   ├── sd_logger.cpp           # CSV-skrivning med periodisk flush (1 sek / 50 pakker)
-│   ├── ui.h                    # UI & display header
-│   ├── ui.cpp                  # 800x480 PSRAM-framebuffer rendering (10 Hz)
-│   ├── deye_bms_decoder.h      # BMS dekoder header
-│   └── deye_bms_decoder.cpp    # Stub til senere implementering af Deye/RPT-protokol
+├── RPT_Batteri_Monitor/        # [Arduino Sketch Mappe] - Åbnes i Arduino IDE eller PlatformIO
+│   ├── RPT_Batteri_Monitor.ino # Hoved-sketch (setup, loop, task scheduling, CAN drain)
+│   ├── board_config.h          # Pin-definitioner (CAN TX=20, RX=19, CH422G, I2C, SPI)
+│   ├── board_battery.h/.cpp    # 3,7V LiPo spændingsmåling via ADC (GPIO 4)
+│   ├── battery_data.h          # Komplette datastrukturer for 32S telemetri, limits & statistik
+│   ├── can_receiver.h/.cpp     # TWAI driver med ringbuffer og alert-drevet RX
+│   ├── deye_bms_decoder.h/.cpp # Deye/Rosen/RPT CAN protokol-dekoder med FreeRTOS mutex
+│   ├── sd_logger.h/.cpp        # MicroSD CSV logger (flush hvert 1000ms / 50 rammer)
+│   ├── ui.h/.cpp               # 800x480 PSRAM-framebuffer rendering, 3-siders UI & touch
+│   ├── web_server.h/.cpp       # WiFi webserver, live dashboard og REST JSON endpoints
+│   └── wifi_config.h           # WiFi SSID, adgangskode og værtsnavn
 └── docs/
-    ├── ESP32-S3-Touch-LCD-7-Sch.pdf   # Komplet fabriks-skematik fra Waveshare
-    └── waveshare_7_board_rev1.2.jpg   # Foto af det fysiske kort med annoteringer
-```
-
-### Kritiske GPIO- og IO-Expander mappings:
-* **CAN TX**: GPIO 20
-* **CAN RX**: GPIO 19
-* **CH422G EXIO5**: Sættes automatisk **HIGH** i koden for at omskifte GPIO 19/20 til den indbyggede TJA1051 CAN-transceiver.
-* **CH422G EXIO2**: Sættes automatisk **HIGH** for at aktivere skærmens baggrundsbelysning.
-* **I2C**: GPIO 8 (SDA), GPIO 9 (SCL).
-* **MicroSD SPI**: GPIO 11 (MOSI), GPIO 12 (SCK), GPIO 13 (MISO), `CH422G EXIO4` (CS).
-* **Display 800×480 RGB**: Kører via hardware-RGB interface i PSRAM ved 16 MHz pixel clock.
-
----
-
-## 6. MicroSD CSV Logformat
-
-Hvis et FAT32-formateret MicroSD-kort er isat ved opstart, oprettes automatisk næste ledige logfil (f.eks. `/can_log_001.csv`, `/can_log_002.csv`).
-
-Formatet er standardiseret CSV:
-```csv
-timestamp_ms,can_id,extended,dlc,data0,data1,data2,data3,data4,data5,data6,data7
-12450,0x356,0,8,34,02,FF,00,1A,0B,00,00
-12550,0x351,0,8,38,02,D0,07,D0,07,00,00
+    ├── ESP32-S3-Touch-LCD-7-Sch.pdf   # Waveshare skematik
+    └── waveshare_7_board_rev1.2.jpg   # Foto af printet med stikforklaringer
 ```
 
 ---
 
-## 7. Kompilering & Upload
+## 6. Kompilering & Upload
 
 ### Mulighed A: PlatformIO (Anbefalet)
 1. Forbind kortet til PC via **UART1** USB-C porten (højre port).
@@ -165,24 +122,14 @@ timestamp_ms,can_id,extended,dlc,data0,data1,data2,data3,data4,data5,data6,data7
    ```
 
 ### Mulighed B: Arduino IDE
-1. Åbn filen: **`RPT_Batteri_Monitor/RPT_Batteri_Monitor.ino`** i Arduino IDE (File -> Open).
-   * *Arduino IDE åbner automatisk alle projektets .h og .cpp filer som faner i toppen.*
-2. Vælg board i Arduino IDE: **ESP32S3 Dev Module**.
-3. Under menuen **Tools** sættes følgende parametre:
+1. Åbn filen: **`RPT_Batteri_Monitor/RPT_Batteri_Monitor.ino`** i Arduino IDE.
+2. Vælg board: **ESP32S3 Dev Module**.
+3. Under **Tools** vælges:
    * **Flash Size**: `16MB (128Mb)`
    * **Partition Scheme**: `16M Flash (3MB APP/9.9MB FATFS)` eller `Default 16MB`
    * **PSRAM**: `OPI PSRAM`
    * **CPU Frequency**: `240MHz`
    * **Upload Speed**: `921600`
    * **USB CDC On Boot**: `Disabled` (eller `Enabled`)
-   * **Port**: Vælg COM-porten for USB-TO-UART forbindelsen (CH343 på UART1-porten).
-4. Klik på **Upload** (pil-knappen).
-
----
-
-## 8. Næste skridt (Klar til Fase 2)
-
-Når kortet er monteret og tændt på anlægget:
-1. Skærmen viser live CAN-statistik over alle fundne ID'er.
-2. Seriel monitoren og MicroSD-kortet opsamler rå data under drift.
-3. Send CSV-logfilen eller et udtræk fra seriel monitor til analysering, hvorefter Fase 2 (BMS dekodning af spænding, strøm, SOC, SOH, cellebalancer og temperaturer) implementeres direkte.
+   * **Port**: Vælg COM-porten for USB-TO-UART forbindelsen (CH343 på UART1).
+4. Klik på **Upload**.

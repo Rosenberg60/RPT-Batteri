@@ -71,11 +71,22 @@
 #define BOARD_RS485_RX_PIN          GPIO_NUM_16
 
 // -----------------------------------------------------------------------------
+// ESP32-S3 LiPo Battery Voltage Sensing (Option A: TP1 to Sensor AD / GPIO 6)
+// Hardware Voltage Divider: R18 = 200k (1%), R19 = 100k (1%)
+// Voltage Multiplier: (200k + 100k) / 100k = 3.00
+// Sensor Connector J8: Pin 1 = 3V3, Pin 2 = AD (GPIO 6), Pin 3 = GND
+// Jumper wire: J8 Pin 2 (AD) connected to TP1 test point on PCB
+// -----------------------------------------------------------------------------
+#define BOARD_LIPO_ADC_PIN          GPIO_NUM_6
+#define BOARD_LIPO_DIVIDER_RATIO    3.00f       // Hardware ratio = (200k + 100k) / 100k
+#define BOARD_LIPO_MIN_CONNECTED_V  2.00f       // Below 2.0V considered disconnected
+
+// -----------------------------------------------------------------------------
 // 7.0-inch 800x480 RGB Display (ST7262 / EK9716 timing)
 // -----------------------------------------------------------------------------
 #define LCD_WIDTH                   800
 #define LCD_HEIGHT                  480
-#define LCD_PIXEL_CLOCK_HZ          (16 * 1000 * 1000) // 16 MHz
+#define LCD_PIXEL_CLOCK_HZ          (16 * 1000 * 1000) // 16 MHz standard ST7262 pixel clock (Powersupply R4850G6 verified standard)
 
 #define LCD_PIN_VSYNC               GPIO_NUM_3
 #define LCD_PIN_HSYNC               GPIO_NUM_46
@@ -116,7 +127,7 @@
 #define LOG_PRINTF(...)   do { Serial.printf(__VA_ARGS__);  } while(0)
 #endif
 
-// Timing parameters for 800x480 RGB Panel (ST7262)
+// Timing parameters for Waveshare 7.0" 800x480 RGB Panel (ST7262) - Official Waveshare Board Definition
 #define LCD_TIMING_HPW              4
 #define LCD_TIMING_HBP              8
 #define LCD_TIMING_HFP              8

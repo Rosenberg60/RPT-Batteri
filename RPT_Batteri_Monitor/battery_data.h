@@ -77,6 +77,22 @@ struct BatteryData {
     float pack2_maxV;
     bool  individualCellsKnown;
 
+    // Dual Pack Telemetry (Pack 1: Rosen 200Ah Master, Pack 2: RPT 300Ah Slave)
+    uint16_t pack1_soc_percent;
+    uint16_t pack2_soc_percent;
+    float pack1_capacity_Ah;
+    float pack2_capacity_Ah;
+    float pack1_current_A;
+    float pack2_current_A;
+    float pack1_power_W;
+    float pack2_power_W;
+    float pack1_energy_kwh;
+    float pack2_energy_kwh;
+    float pack1_chargeLimit_A;
+    float pack2_chargeLimit_A;
+    float pack1_dischargeLimit_A;
+    float pack2_dischargeLimit_A;
+
     char manufacturer[16];
 
     bool chargeAllowed;
@@ -84,6 +100,11 @@ struct BatteryData {
     bool communicationOK;
     bool warningActive;
     bool protectionActive;
+
+    // ESP32-S3 LiPo 3.7V Battery Telemetry (Option A: TP1 via GPIO 6)
+    float    lipo_voltage_V;
+    uint8_t  lipo_soc_percent;
+    bool     lipo_connected;
 
     uint32_t lastUpdate_ms;
 };

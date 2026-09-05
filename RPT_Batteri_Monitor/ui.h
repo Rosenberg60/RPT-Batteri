@@ -55,10 +55,16 @@ private:
     // Touch detection (with coordinate mapping)
     void checkTouch();
 
-    // Render Routines (Pages 1, 2, 3)
-    void drawDashboard(const BatteryData& bData, const ScannerOverview& overview);
-    void drawCellDiagnostics(const BatteryData& bData, const ScannerOverview& overview);
-    void drawScanner(const ScannerOverview& overview);
+    // Render Routines (Static layout drawn once, dynamic values updated in-place)
+    void drawStaticDashboard();
+    void updateDynamicDashboard(const BatteryData& bData, const ScannerOverview& overview);
+
+    void drawStaticCellDiagnostics();
+    void updateDynamicCellDiagnostics(const BatteryData& bData, const ScannerOverview& overview);
+
+    void drawStaticScanner();
+    void updateDynamicScanner(const ScannerOverview& overview, const BatteryData& bData);
+
     void drawBottomNav(uint8_t activePage);
 
     // Drawing primitives for RGB565 framebuffer
@@ -68,7 +74,9 @@ private:
     void drawFastHLine(int x, int y, int w, uint16_t color);
     void drawFastVLine(int x, int y, int h, uint16_t color);
     void drawChar(int x, int y, char c, uint16_t color, uint16_t bg, uint8_t size);
+    void drawGlyph(int x, int y, const uint8_t* glyph, uint16_t color, uint16_t bg, uint8_t size);
     void drawString(int x, int y, const char* text, uint16_t color, uint16_t bg, uint8_t size = 1);
+    void drawTextRow(int x, int y, int maxW, const char* text, uint16_t color, uint16_t bg, uint8_t size = 1);
 
     // FreeRTOS UI Task
     static void uiTaskTrampoline(void* arg);
@@ -78,6 +86,8 @@ private:
     uint16_t* _framebuffer;
     uint8_t _ch422g_out_mask;
     UIViewMode _view_mode;
+    UIViewMode _last_drawn_mode;
     uint32_t _last_touch_ms;
     bool _initialized;
+    bool _is_direct_fb;
 };

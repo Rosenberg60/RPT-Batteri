@@ -99,11 +99,11 @@ bool CanReceiver::begin(uint32_t baudrate) {
     _last_rate_calc_ms = millis();
     LOG_PRINTLN("[CAN] TWAI driver successfully installed & started.");
 
-    // Spawn dedicated CAN RX FreeRTOS task on Core 0
+    // Spawn dedicated CAN RX FreeRTOS task on Core 0 (8 KB stack)
     xTaskCreatePinnedToCore(
         rxTaskTrampoline,
         "can_rx_task",
-        4096,
+        8192,
         this,
         5,              // High priority to prevent RX queue overruns
         NULL,

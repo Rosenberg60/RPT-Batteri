@@ -32,6 +32,9 @@ private:
     DeyeBmsDecoder();
     ~DeyeBmsDecoder();
 
+    void updatePackTelemetry();
+
     BatteryData _data;
-    portMUX_TYPE _spinlock;
+    bool _pack2_soc_direct;
+    SemaphoreHandle_t _mutex;
 };
