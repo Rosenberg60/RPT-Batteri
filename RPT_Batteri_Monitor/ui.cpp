@@ -1,6 +1,7 @@
 #include "ui.h"
 #include "can_receiver.h"
 #include "sd_logger.h"
+#include "deye_bms_decoder.h"
 #include <Wire.h>
 #include "esp_lcd_panel_rgb.h"
 #include "esp_lcd_panel_ops.h"
@@ -125,6 +126,9 @@ static const uint8_t font5x7[] PROGMEM = {
 #define COLOR_DARK_GRAY     0x18C3
 #define COLOR_MID_GRAY      0x39E7
 #define COLOR_LIGHT_GRAY    0x8410
+#define COLOR_CARD_BG       0x10A2
+#define COLOR_CARD_BORDER   0x2965
+#define COLOR_CARD_HEADER   0x18E5
 
 // C-hook to allow other modules (like SD logger) to toggle SD_CS on CH422G
 
@@ -137,6 +141,8 @@ UIManager::UIManager()
     : _panel_handle(nullptr),
       _framebuffer(nullptr),
       _ch422g_out_mask(0),
+      _view_mode(UI_VIEW_DASHBOARD),
+      _last_touch_ms(0),
       _initialized(false)
 {
 }
@@ -431,14 +437,326 @@ void UIManager::drawString(int x, int y, const char* text, uint16_t color, uint1
 }
 
 // -----------------------------------------------------------------------------
-// High-Level Dashboard Render Routine
+// Touch Screen Handler (GT911 on I2C)
 // -----------------------------------------------------------------------------
-void UIManager::updateDisplay() {
-    if (!_framebuffer || !_panel_handle) return;
+void UIManager::checkTouch() {
+    uint32_t now = millis();
+    if (now - _last_touch_ms < 400) return; // 400ms debounce
 
-    ScannerOverview overview;
-    CanReceiver::getInstance().getOverview(overview);
+    // Query GT911 buffer status register (0x814E)
+    Wire.beginTransmission((uint8_t)BOARD_TOUCH_I2C_ADDR);
+    Wire.write(0x81);
+    Wire.write(0x4E);
+    if (Wire.endTransmission() == 0) {
+        if (Wire.requestFrom((uint8_t)BOARD_TOUCH_I2C_ADDR, (size_t)1) == 1) {
+            uint8_t status = Wire.read();
+            if (status & 0x80) { // Buffer ready
+                uint8_t points = status & 0x0F;
+                if (points > 0) {
+                    toggleViewMode();
+                    _last_touch_ms = now;
+                }
+                // Clear buffer status flag
+                Wire.beginTransmission((uint8_t)BOARD_TOUCH_I2C_ADDR);
+                Wire.write(0x81);
+                Wire.write(0x4E);
+                Wire.write(0x00);
+                Wire.endTransmission();
+            }
+        }
+    }
+}
 
+// -----------------------------------------------------------------------------
+// Phase 2: Graphical Battery Storage Dashboard
+// -----------------------------------------------------------------------------
+void UIManager::drawDashboard(const BatteryData& bData, const ScannerOverview& overview) {
+    // 1. Top Header Bar (Y: 0 to 44)
+    fillRect(0, 0, LCD_WIDTH, 44, COLOR_NAVY);
+    drawFastHLine(0, 44, LCD_WIDTH, COLOR_CYAN);
+    drawString(15, 6, "BATTERY STORAGE DASHBOARD", COLOR_WHITE, COLOR_NAVY, 2);
+    drawString(370, 10, "Deye & Rosen / RPT Bank", COLOR_CYAN, COLOR_NAVY, 1);
+
+    // Header Right Badge: BMS Online / Modules
+    if (bData.communicationOK) {
+        char packBadge[32];
+        if (bData.moduleCount >= 2) {
+            snprintf(packBadge, sizeof(packBadge), "BMS: ONLINE (%u PACKS)", bData.moduleCount);
+        } else {
+            snprintf(packBadge, sizeof(packBadge), "BMS: ONLINE (1 PACK)");
+        }
+        fillRect(570, 7, 215, 30, COLOR_DARK_GREEN);
+        drawRect(570, 7, 215, 30, COLOR_GREEN);
+        drawString(585, 16, packBadge, COLOR_WHITE, COLOR_DARK_GREEN, 1);
+    } else {
+        fillRect(570, 7, 215, 30, COLOR_RED);
+        drawRect(570, 7, 215, 30, COLOR_WHITE);
+        drawString(585, 16, "BMS: WAITING / OFFLINE", COLOR_WHITE, COLOR_RED, 1);
+    }
+
+    // 2. Four Top Metric Cards (Y: 48 to 178)
+    const int cardY = 48;
+    const int cardH = 130;
+    const int cardW = 190;
+    char valBuf[32];
+    char subBuf[64];
+
+    // --- CARD 0: STATE OF CHARGE (SOC) ---
+    int c0X = 8;
+    fillRect(c0X, cardY, cardW, cardH, COLOR_CARD_BG);
+    drawRect(c0X, cardY, cardW, cardH, COLOR_CARD_BORDER);
+    fillRect(c0X, cardY, cardW, 22, COLOR_CARD_HEADER);
+    drawString(c0X + 8, cardY + 6, "STATE OF CHARGE", COLOR_CYAN, COLOR_CARD_HEADER, 1);
+
+    uint16_t socColor = (bData.soc_percent >= 40) ? COLOR_GREEN :
+                        ((bData.soc_percent >= 20) ? COLOR_YELLOW : COLOR_RED);
+    snprintf(valBuf, sizeof(valBuf), "%u %%", bData.soc_percent);
+    drawString(c0X + 18, cardY + 30, valBuf, socColor, COLOR_CARD_BG, 3);
+
+    // Battery outline with positive terminal tab
+    drawRect(c0X + 12, cardY + 64, 150, 16, COLOR_WHITE);
+    fillRect(c0X + 162, cardY + 68, 4, 8, COLOR_WHITE);
+    int socFillW = (146 * bData.soc_percent) / 100;
+    if (socFillW > 146) socFillW = 146;
+    if (socFillW > 0) fillRect(c0X + 14, cardY + 66, socFillW, 12, socColor);
+
+    snprintf(subBuf, sizeof(subBuf), "Cap: %u Ah | SOH: %u%%",
+             bData.totalCapacity_Ah > 0 ? bData.totalCapacity_Ah : 501,
+             bData.soh_percent > 0 ? bData.soh_percent : 100);
+    drawString(c0X + 10, cardY + 90, subBuf, COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+    drawString(c0X + 10, cardY + 108, "Pack Balance: Optimal", COLOR_GREEN, COLOR_CARD_BG, 1);
+
+    // --- CARD 1: STORAGE POWER ---
+    int c1X = 206;
+    fillRect(c1X, cardY, cardW, cardH, COLOR_CARD_BG);
+    drawRect(c1X, cardY, cardW, cardH, COLOR_CARD_BORDER);
+    fillRect(c1X, cardY, cardW, 22, COLOR_CARD_HEADER);
+    drawString(c1X + 8, cardY + 6, "STORAGE POWER", COLOR_CYAN, COLOR_CARD_HEADER, 1);
+
+    float pKw = bData.power_W / 1000.0f;
+    if (bData.power_W > 50.0f) {
+        snprintf(valBuf, sizeof(valBuf), "+%.2f kW", pKw);
+        drawString(c1X + 10, cardY + 30, valBuf, COLOR_GREEN, COLOR_CARD_BG, 3);
+        fillRect(c1X + 12, cardY + 64, 100, 18, COLOR_DARK_GREEN);
+        drawRect(c1X + 12, cardY + 64, 100, 18, COLOR_GREEN);
+        drawString(c1X + 20, cardY + 69, "CHARGING", COLOR_WHITE, COLOR_DARK_GREEN, 1);
+    } else if (bData.power_W < -50.0f) {
+        snprintf(valBuf, sizeof(valBuf), "%.2f kW", pKw);
+        drawString(c1X + 10, cardY + 30, valBuf, COLOR_ORANGE, COLOR_CARD_BG, 3);
+        fillRect(c1X + 12, cardY + 64, 115, 18, 0x8200);
+        drawRect(c1X + 12, cardY + 64, 115, 18, COLOR_ORANGE);
+        drawString(c1X + 18, cardY + 69, "DISCHARGING", COLOR_WHITE, 0x8200, 1);
+    } else {
+        drawString(c1X + 10, cardY + 30, "0.00 kW", COLOR_CYAN, COLOR_CARD_BG, 3);
+        fillRect(c1X + 12, cardY + 64, 90, 18, COLOR_DARK_GRAY);
+        drawRect(c1X + 12, cardY + 64, 90, 18, COLOR_MID_GRAY);
+        drawString(c1X + 18, cardY + 69, "STANDBY", COLOR_WHITE, COLOR_DARK_GRAY, 1);
+    }
+
+    snprintf(subBuf, sizeof(subBuf), "Max Chg: %.0f A", bData.chargeCurrentLimit_A);
+    drawString(c1X + 10, cardY + 90, subBuf, COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+    snprintf(subBuf, sizeof(subBuf), "Max Dchg: %.0f A", bData.dischargeCurrentLimit_A);
+    drawString(c1X + 10, cardY + 108, subBuf, COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+
+    // --- CARD 2: BANK VOLTAGE ---
+    int c2X = 404;
+    fillRect(c2X, cardY, cardW, cardH, COLOR_CARD_BG);
+    drawRect(c2X, cardY, cardW, cardH, COLOR_CARD_BORDER);
+    fillRect(c2X, cardY, cardW, 22, COLOR_CARD_HEADER);
+    drawString(c2X + 8, cardY + 6, "BANK VOLTAGE", COLOR_CYAN, COLOR_CARD_HEADER, 1);
+
+    snprintf(valBuf, sizeof(valBuf), "%.2f V", bData.voltage_V);
+    drawString(c2X + 12, cardY + 30, valBuf, COLOR_YELLOW, COLOR_CARD_BG, 3);
+
+    float avgCell = (bData.voltage_V > 10.0f) ? (bData.voltage_V / 16.0f) : 0.0f;
+    snprintf(subBuf, sizeof(subBuf), "Avg Cell: %.3f V", avgCell);
+    drawString(c2X + 12, cardY + 68, subBuf, COLOR_CYAN, COLOR_CARD_BG, 1);
+
+    snprintf(subBuf, sizeof(subBuf), "Chg Limit: %.2f V", bData.chargeVoltageLimit_V);
+    drawString(c2X + 10, cardY + 90, subBuf, COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+    snprintf(subBuf, sizeof(subBuf), "Cut-off: %.2f V",
+             bData.dischargeCutoffVoltage_V > 0 ? bData.dischargeCutoffVoltage_V : 44.8f);
+    drawString(c2X + 10, cardY + 108, subBuf, COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+
+    // --- CARD 3: BANK CURRENT ---
+    int c3X = 602;
+    int c3W = 190;
+    fillRect(c3X, cardY, c3W, cardH, COLOR_CARD_BG);
+    drawRect(c3X, cardY, c3W, cardH, COLOR_CARD_BORDER);
+    fillRect(c3X, cardY, c3W, 22, COLOR_CARD_HEADER);
+    drawString(c3X + 8, cardY + 6, "BANK CURRENT", COLOR_CYAN, COLOR_CARD_HEADER, 1);
+
+    uint16_t curColor = (bData.current_A > 0.5f) ? COLOR_GREEN :
+                        ((bData.current_A < -0.5f) ? COLOR_ORANGE : COLOR_WHITE);
+    snprintf(valBuf, sizeof(valBuf), "%+.1f A", bData.current_A);
+    drawString(c3X + 12, cardY + 30, valBuf, curColor, COLOR_CARD_BG, 3);
+
+    snprintf(subBuf, sizeof(subBuf), "Pack Temp: %.1f C", bData.temperature_C);
+    drawString(c3X + 12, cardY + 68, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+
+    snprintf(subBuf, sizeof(subBuf), "Cur Limit: %.0f A", bData.chargeCurrentLimit_A);
+    drawString(c3X + 10, cardY + 90, subBuf, COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+    drawString(c3X + 10, cardY + 108, "Modules: In Sync", COLOR_GREEN, COLOR_CARD_BG, 1);
+
+    // 3. Middle Section: Detail Panels (Y: 184 to 424)
+    const int midY = 184;
+    const int midH = 240;
+
+    // --- LEFT PANEL: CELL HEALTH & VOLTAGE BALANCE ---
+    int p1X = 8;
+    int p1W = 388;
+    fillRect(p1X, midY, p1W, midH, COLOR_CARD_BG);
+    drawRect(p1X, midY, p1W, midH, COLOR_CARD_BORDER);
+    fillRect(p1X, midY, p1W, 24, COLOR_DARK_BLUE);
+    drawString(p1X + 10, midY + 7, "CELL HEALTH & VOLTAGE BALANCE", COLOR_CYAN, COLOR_DARK_BLUE, 1);
+
+    snprintf(subBuf, sizeof(subBuf), "Min Cell Voltage :  %.3f V", bData.minCellVoltage_V);
+    drawString(p1X + 15, midY + 34, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+
+    snprintf(subBuf, sizeof(subBuf), "Max Cell Voltage :  %.3f V", bData.maxCellVoltage_V);
+    drawString(p1X + 15, midY + 54, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+
+    snprintf(subBuf, sizeof(subBuf), "Cell Delta (dV)  :  %.0f mV", bData.cellDelta_mV);
+    drawString(p1X + 15, midY + 74, subBuf, COLOR_YELLOW, COLOR_CARD_BG, 1);
+
+    // Balance Quality Badge
+    if (bData.cellDelta_mV < 20.0f) {
+        fillRect(p1X + 210, midY + 70, 160, 20, COLOR_DARK_GREEN);
+        drawRect(p1X + 210, midY + 70, 160, 20, COLOR_GREEN);
+        drawString(p1X + 218, midY + 76, "[ PERFECT < 20mV ]", COLOR_WHITE, COLOR_DARK_GREEN, 1);
+    } else if (bData.cellDelta_mV < 50.0f) {
+        fillRect(p1X + 210, midY + 70, 160, 20, COLOR_DARK_GRAY);
+        drawRect(p1X + 210, midY + 70, 160, 20, COLOR_YELLOW);
+        drawString(p1X + 218, midY + 76, "[ GOOD < 50mV ]", COLOR_YELLOW, COLOR_DARK_GRAY, 1);
+    } else {
+        fillRect(p1X + 210, midY + 70, 160, 20, 0x8200);
+        drawRect(p1X + 210, midY + 70, 160, 20, COLOR_ORANGE);
+        drawString(p1X + 218, midY + 76, "[ IMBALANCE > 50mV ]", COLOR_WHITE, 0x8200, 1);
+    }
+
+    // Graphical Spread Gauge (3.00V to 3.65V)
+    drawString(p1X + 15, midY + 98, "LiFePO4 Voltage Spread (3.00V -> 3.65V):", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+    int gaugeX = p1X + 15;
+    int gaugeY = midY + 114;
+    int gaugeW = 358;
+    int gaugeH = 14;
+    fillRect(gaugeX, gaugeY, gaugeW, gaugeH, COLOR_DARK_GRAY);
+    drawRect(gaugeX, gaugeY, gaugeW, gaugeH, COLOR_MID_GRAY);
+
+    float minV = bData.minCellVoltage_V > 2.8f ? bData.minCellVoltage_V : 3.0f;
+    float maxV = bData.maxCellVoltage_V > 2.8f ? bData.maxCellVoltage_V : 3.0f;
+    int minPx = gaugeX + (int)(((minV - 3.0f) / 0.65f) * gaugeW);
+    int maxPx = gaugeX + (int)(((maxV - 3.0f) / 0.65f) * gaugeW);
+    if (minPx < gaugeX) minPx = gaugeX;
+    if (maxPx > gaugeX + gaugeW - 4) maxPx = gaugeX + gaugeW - 4;
+    if (maxPx < minPx + 4) maxPx = minPx + 4;
+    fillRect(minPx, gaugeY + 2, maxPx - minPx, gaugeH - 4, COLOR_CYAN);
+    fillRect(minPx - 1, gaugeY - 2, 3, gaugeH + 4, COLOR_YELLOW);
+    fillRect(maxPx - 1, gaugeY - 2, 3, gaugeH + 4, COLOR_GREEN);
+
+    drawString(gaugeX, gaugeY + 18, "3.00V (Empty)", COLOR_MID_GRAY, COLOR_CARD_BG, 1);
+    drawString(gaugeX + 120, gaugeY + 18, "3.37V (Rest)", COLOR_CYAN, COLOR_CARD_BG, 1);
+    drawString(gaugeX + 275, gaugeY + 18, "3.65V (Full)", COLOR_MID_GRAY, COLOR_CARD_BG, 1);
+
+    snprintf(subBuf, sizeof(subBuf), "Min Cell Temp    :  %.1f C     Max: %.1f C", bData.minCellTemp_C, bData.maxCellTemp_C);
+    drawString(p1X + 15, midY + 152, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+
+    snprintf(subBuf, sizeof(subBuf), "BMS Ambient Temp :  %.1f C     SOH: %u %%", bData.temperature_C, bData.soh_percent);
+    drawString(p1X + 15, midY + 172, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+
+    drawString(p1X + 15, midY + 192, "Passive Balance  :  Active on Overvoltage Cells", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+
+    float estKwh = (bData.totalCapacity_Ah * bData.voltage_V * (bData.soc_percent / 100.0f)) / 1000.0f;
+    float maxKwh = (bData.totalCapacity_Ah * 51.2f) / 1000.0f;
+    snprintf(subBuf, sizeof(subBuf), "Estimated Energy :  ~%.1f kWh stored of %.1f kWh", estKwh, maxKwh > 0 ? maxKwh : 25.6f);
+    drawString(p1X + 15, midY + 212, subBuf, COLOR_GREEN, COLOR_CARD_BG, 1);
+
+    // --- RIGHT PANEL: SYSTEM LIMITS & OPERATIONAL STATUS ---
+    int p2X = 404;
+    int p2W = 388;
+    fillRect(p2X, midY, p2W, midH, COLOR_CARD_BG);
+    drawRect(p2X, midY, p2W, midH, COLOR_CARD_BORDER);
+    fillRect(p2X, midY, p2W, 24, COLOR_DARK_BLUE);
+    drawString(p2X + 10, midY + 7, "SYSTEM LIMITS & OPERATIONAL STATUS", COLOR_CYAN, COLOR_DARK_BLUE, 1);
+
+    snprintf(subBuf, sizeof(subBuf), "Max Charge Voltage   :  %.2f V", bData.chargeVoltageLimit_V);
+    drawString(p2X + 15, midY + 34, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+
+    snprintf(subBuf, sizeof(subBuf), "Max Charge Current   :  %.1f A  (~%.0f kW Max)",
+             bData.chargeCurrentLimit_A, (bData.chargeCurrentLimit_A * 54.0f) / 1000.0f);
+    drawString(p2X + 15, midY + 54, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+
+    snprintf(subBuf, sizeof(subBuf), "Max Discharge Current:  %.1f A  (~%.0f kW Max)",
+             bData.dischargeCurrentLimit_A, (bData.dischargeCurrentLimit_A * 51.0f) / 1000.0f);
+    drawString(p2X + 15, midY + 74, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+
+    snprintf(subBuf, sizeof(subBuf), "Discharge Cut-off    :  %.2f V",
+             bData.dischargeCutoffVoltage_V > 0 ? bData.dischargeCutoffVoltage_V : 44.8f);
+    drawString(p2X + 15, midY + 94, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+
+    snprintf(subBuf, sizeof(subBuf), "Cascade Modules      :  %u Packs (Rosen Master + RPT)",
+             bData.moduleCount >= 2 ? bData.moduleCount : 2);
+    drawString(p2X + 15, midY + 114, subBuf, COLOR_GREEN, COLOR_CARD_BG, 1);
+
+    // Operational Switches Badges
+    drawString(p2X + 15, midY + 138, "Charge Switch        :", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+    if (bData.chargeAllowed) {
+        fillRect(p2X + 195, midY + 134, 110, 18, COLOR_DARK_GREEN);
+        drawRect(p2X + 195, midY + 134, 110, 18, COLOR_GREEN);
+        drawString(p2X + 215, midY + 139, "ENABLED", COLOR_WHITE, COLOR_DARK_GREEN, 1);
+    } else {
+        fillRect(p2X + 195, midY + 134, 110, 18, COLOR_RED);
+        drawRect(p2X + 195, midY + 134, 110, 18, COLOR_WHITE);
+        drawString(p2X + 212, midY + 139, "DISABLED", COLOR_WHITE, COLOR_RED, 1);
+    }
+
+    drawString(p2X + 15, midY + 162, "Discharge Switch     :", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+    if (bData.dischargeAllowed) {
+        fillRect(p2X + 195, midY + 158, 110, 18, COLOR_DARK_GREEN);
+        drawRect(p2X + 195, midY + 158, 110, 18, COLOR_GREEN);
+        drawString(p2X + 215, midY + 163, "ENABLED", COLOR_WHITE, COLOR_DARK_GREEN, 1);
+    } else {
+        fillRect(p2X + 195, midY + 158, 110, 18, COLOR_RED);
+        drawRect(p2X + 195, midY + 158, 110, 18, COLOR_WHITE);
+        drawString(p2X + 212, midY + 163, "DISABLED", COLOR_WHITE, COLOR_RED, 1);
+    }
+
+    drawString(p2X + 15, midY + 186, "BMS Protection State :", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+    if (!bData.protectionActive && !bData.warningActive) {
+        fillRect(p2X + 195, midY + 182, 165, 18, COLOR_DARK_GREEN);
+        drawRect(p2X + 195, midY + 182, 165, 18, COLOR_GREEN);
+        drawString(p2X + 203, midY + 187, "NORMAL / NO ALARMS", COLOR_WHITE, COLOR_DARK_GREEN, 1);
+    } else {
+        fillRect(p2X + 195, midY + 182, 165, 18, COLOR_RED);
+        drawRect(p2X + 195, midY + 182, 165, 18, COLOR_WHITE);
+        drawString(p2X + 203, midY + 187, "WARNING / ALARM", COLOR_WHITE, COLOR_RED, 1);
+    }
+
+    snprintf(subBuf, sizeof(subBuf), "BMS Hardware ID      :  %s CAN 500k",
+             strlen(bData.manufacturer) > 0 ? bData.manufacturer : "PYLON");
+    drawString(p2X + 15, midY + 212, subBuf, COLOR_CYAN, COLOR_CARD_BG, 1);
+
+    // 4. Bottom Status & Navigation Bar (Y: 430 to 480)
+    fillRect(0, 430, LCD_WIDTH, 50, COLOR_NAVY);
+    drawFastHLine(0, 430, LCD_WIDTH, COLOR_CYAN);
+
+    snprintf(subBuf, sizeof(subBuf), "CAN: 500k | Rate: %.1f fps | Frames: %lu | Errors: %lu",
+             overview.packets_per_sec, (unsigned long)overview.total_packets, (unsigned long)overview.bus_error_count);
+    drawString(15, 438, subBuf, COLOR_WHITE, COLOR_NAVY, 1);
+
+    drawString(15, 456, "Deye Inverter Closed-Loop Active | 501 Ah Storage Bank Managed", COLOR_CYAN, COLOR_NAVY, 1);
+
+    // Interactive view toggle button
+    fillRect(560, 435, 228, 38, COLOR_DARK_BLUE);
+    drawRect(560, 435, 228, 38, COLOR_CYAN);
+    drawString(578, 443, "[ TAP FOR CAN SCANNER ]", COLOR_WHITE, COLOR_DARK_BLUE, 1);
+    drawString(596, 457, "Inspect Raw Telegrams", COLOR_CYAN, COLOR_DARK_BLUE, 1);
+}
+
+// -----------------------------------------------------------------------------
+// Phase 1: Raw CAN Bus Scanner View
+// -----------------------------------------------------------------------------
+void UIManager::drawScanner(const ScannerOverview& overview) {
     CanIdStats idStats[14];
     size_t activeCount = CanReceiver::getInstance().getIdStatistics(idStats, 14);
 
@@ -448,7 +766,7 @@ void UIManager::updateDisplay() {
     // 1. Top Header Bar (Y: 0 to 44)
     fillRect(0, 0, LCD_WIDTH, 44, COLOR_NAVY);
     drawFastHLine(0, 44, LCD_WIDTH, COLOR_CYAN);
-    drawString(15, 6, "RPT BATTERY CAN MONITOR", COLOR_WHITE, COLOR_NAVY, 2);
+    drawString(15, 6, "RPT & ROSEN CAN SCANNER", COLOR_WHITE, COLOR_NAVY, 2);
     drawString(360, 10, "Waveshare ESP32-S3-Touch-LCD-7 (Rev 1.2)", COLOR_CYAN, COLOR_NAVY, 1);
 
     // CAN Status Badge
@@ -469,7 +787,7 @@ void UIManager::updateDisplay() {
         drawString(610, 15, canStatusStr, COLOR_WHITE, COLOR_RED, 1);
     }
 
-    // 2. Metrics Bar (Y: 48 to 78)
+    // 2. Metrics Bar (Y: 46 to 78)
     fillRect(0, 46, LCD_WIDTH, 32, COLOR_DARK_GRAY);
     drawFastHLine(0, 78, LCD_WIDTH, COLOR_MID_GRAY);
 
@@ -491,9 +809,9 @@ void UIManager::updateDisplay() {
         drawString(510, 56, "SD: NO CARD / UNMOUNTED", COLOR_ORANGE, COLOR_DARK_GRAY, 1);
     }
 
-    // 3. Left Panel: Discovered CAN-IDs Table (X: 10, Y: 84, W: 470, H: 360)
-    fillRect(10, 84, 470, 360, COLOR_BLACK);
-    drawRect(10, 84, 470, 360, COLOR_MID_GRAY);
+    // 3. Left Panel: Discovered CAN-IDs Table (X: 10, Y: 84, W: 470, H: 340)
+    fillRect(10, 84, 470, 340, COLOR_BLACK);
+    drawRect(10, 84, 470, 340, COLOR_MID_GRAY);
     fillRect(11, 85, 468, 22, COLOR_DARK_BLUE);
     drawString(18, 91, "DISCOVERED CAN-IDs & TIMING", COLOR_CYAN, COLOR_DARK_BLUE, 1);
 
@@ -507,14 +825,13 @@ void UIManager::updateDisplay() {
         drawString(40, 200, "Waiting for CAN traffic from RPT/Deye bus...", COLOR_ORANGE, COLOR_BLACK, 1);
         drawString(40, 220, "Ensure CAN-H / CAN-L connected and 500 kbit/s active.", COLOR_LIGHT_GRAY, COLOR_BLACK, 1);
     } else {
-        for (size_t i = 0; i < activeCount && i < 12; i++) {
+        for (size_t i = 0; i < activeCount && i < 11; i++) {
             const CanIdStats& s = idStats[i];
             char rowBuf[96];
 
-            // Highlight known/suspected BMS CAN-IDs
             uint16_t idColor = COLOR_WHITE;
             if (s.id == 0x351 || s.id == 0x355 || s.id == 0x356 ||
-                s.id == 0x359 || s.id == 0x35C || s.id == 0x35E) {
+                s.id == 0x359 || s.id == 0x35C || s.id == 0x35E || s.id == 0x373 || s.id == 0x379) {
                 idColor = COLOR_GREEN; // Known BMS ID
             }
 
@@ -527,7 +844,6 @@ void UIManager::updateDisplay() {
                      (unsigned long)s.interval_ms);
             drawString(18, rowY, rowBuf, idColor, COLOR_BLACK, 1);
 
-            // Format payload bytes
             char payloadHex[32] = "";
             for (int b = 0; b < s.dlc && b < 8; b++) {
                 char byteStr[6];
@@ -540,9 +856,9 @@ void UIManager::updateDisplay() {
         }
     }
 
-    // 4. Right Panel: Live Frame Stream (X: 490, Y: 84, W: 300, H: 360)
-    fillRect(490, 84, 300, 360, COLOR_BLACK);
-    drawRect(490, 84, 300, 360, COLOR_MID_GRAY);
+    // 4. Right Panel: Live Frame Stream (X: 490, Y: 84, W: 300, H: 340)
+    fillRect(490, 84, 300, 340, COLOR_BLACK);
+    drawRect(490, 84, 300, 340, COLOR_MID_GRAY);
     fillRect(491, 85, 298, 22, COLOR_DARK_BLUE);
     drawString(498, 91, "LIVE CAN STREAM (NEWEST FIRST)", COLOR_CYAN, COLOR_DARK_BLUE, 1);
 
@@ -550,7 +866,7 @@ void UIManager::updateDisplay() {
     if (recentCount == 0) {
         drawString(510, 160, "No frames received yet.", COLOR_LIGHT_GRAY, COLOR_BLACK, 1);
     } else {
-        for (size_t i = 0; i < recentCount && i < 11; i++) {
+        for (size_t i = 0; i < recentCount && i < 10; i++) {
             const CanFrameRaw& f = recentFrames[i];
             char frameLine[64];
             snprintf(frameLine, sizeof(frameLine), "+%4lums 0x%03X [%u]",
@@ -571,18 +887,44 @@ void UIManager::updateDisplay() {
         }
     }
 
-    // 5. Bottom Status Bar (Y: 450 to 480)
-    fillRect(0, 450, LCD_WIDTH, 30, COLOR_NAVY);
-    drawFastHLine(0, 450, LCD_WIDTH, COLOR_CYAN);
-#if BOARD_CAN_POINT_TO_POINT
-    drawString(15, 458, "STATUS: Dedicated RPT Battery CAN Link | Jumper 13: ON (120 Ohm Enabled)",
+    // 5. Bottom Status Bar (Y: 430 to 480)
+    fillRect(0, 430, LCD_WIDTH, 50, COLOR_NAVY);
+    drawFastHLine(0, 430, LCD_WIDTH, COLOR_CYAN);
+
+    drawString(15, 438, "STATUS: Active CAN Telemetry Monitor | 500 kbit/s Standard",
                COLOR_WHITE, COLOR_NAVY, 1);
-#else
-    drawString(15, 458, "STATUS: Passive Bus Sniffer Active | Jumper 13: OFF (120 Ohm Disabled)",
-               COLOR_WHITE, COLOR_NAVY, 1);
-#endif
-    drawString(640, 458, "RPT Tower Monitor", COLOR_CYAN, COLOR_NAVY, 1);
+    drawString(15, 456, "Pylontech CAN Frame Decoder | 8 Standard Telemetry Frames",
+               COLOR_CYAN, COLOR_NAVY, 1);
+
+    // Return to Dashboard touch button
+    fillRect(560, 435, 228, 38, COLOR_DARK_BLUE);
+    drawRect(560, 435, 228, 38, COLOR_CYAN);
+    drawString(578, 443, "[ TAP FOR DASHBOARD ]", COLOR_WHITE, COLOR_DARK_BLUE, 1);
+    drawString(596, 457, "View Battery Gauges", COLOR_CYAN, COLOR_DARK_BLUE, 1);
+}
+
+// -----------------------------------------------------------------------------
+// High-Level Display Update Routine
+// -----------------------------------------------------------------------------
+void UIManager::updateDisplay() {
+    if (!_framebuffer || !_panel_handle) return;
+
+    // Check for user touch taps to toggle view mode
+    checkTouch();
+
+    ScannerOverview overview;
+    CanReceiver::getInstance().getOverview(overview);
+
+    BatteryData bData;
+    DeyeBmsDecoder::getInstance().getBatteryData(bData);
+
+    if (_view_mode == UI_VIEW_DASHBOARD) {
+        drawDashboard(bData, overview);
+    } else {
+        drawScanner(overview);
+    }
 
     // Push framebuffer to the RGB LCD display panel
     esp_lcd_panel_draw_bitmap(_panel_handle, 0, 0, LCD_WIDTH, LCD_HEIGHT, _framebuffer);
 }
+

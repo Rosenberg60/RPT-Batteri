@@ -1,7 +1,7 @@
 // =============================================================================
 // PROJEKT : RPT-Batterimonitor med Waveshare ESP32-S3-Touch-LCD-7 (Rev 1.2)
-// VERSION : v1.0.5 (ST7262 LCD Reset & Dual Serial Output Fix)
-// DATO/TID: 2026-09-04 16:15:00
+// VERSION : v1.1.0 (Phase 2 - Battery Storage Dashboard)
+// DATO/TID: 2026-09-05 11:45:00
 // =============================================================================
 
 #include <Arduino.h>
@@ -19,10 +19,10 @@ static uint32_t last_heartbeat_ms = 0;
 
 void printStartupBanner() {
     LOG_PRINTLN("\n================================================================================");
-    LOG_PRINTLN("   RPT BATTERY CAN-BUS PASSIVE SCANNER - PHASE 1");
+    LOG_PRINTLN("   RPT & ROSEN BATTERY STORAGE DASHBOARD - PHASE 2");
     LOG_PRINTLN("   Target Hardware: Waveshare ESP32-S3-Touch-LCD-7 (Rev 1.2)");
     LOG_PRINTLN("   Screen: 7.0 inch IPS RGB (800x480) - ST7262 Driver");
-    LOG_PRINTLN("   Firmware Date  : 2026-09-04 16:15:00 (v1.0.5 ST7262/Dual-Serial)");
+    LOG_PRINTLN("   Firmware Date  : 2026-09-05 11:45:00 (v1.1.0 Dashboard & Decoder)");
     LOG_PRINTF( "   Compile Time   : %s %s\n", __DATE__, __TIME__);
     LOG_PRINTLN("================================================================================");
     LOG_PRINTF("   CAN Controller : ESP32-S3 TWAI (TX: GPIO%d, RX: GPIO%d)\n",
@@ -47,13 +47,24 @@ void printSerialIdStatistics() {
     CanIdStats stats[MAX_TRACKED_CAN_IDS];
     size_t count = CanReceiver::getInstance().getIdStatistics(stats, MAX_TRACKED_CAN_IDS);
 
-    LOG_PRINTLN("\n--- [CAN SCANNER PERIODIC REPORT] ---------------------------------------------");
+    LOG_PRINTLN("\n--- [BATTERY TELEMETRY & CAN REPORT] -----------------------------------------");
     LOG_PRINTF("Total Frames: %lu | Rate: %.1f fps | Active IDs: %u | Bus Errors: %lu | SD: %s\n",
                   (unsigned long)overview.total_packets,
                   overview.packets_per_sec,
                   (unsigned int)overview.active_ids_count,
                   (unsigned long)overview.bus_error_count,
                   overview.sd_card_mounted ? overview.sd_filename : "No SD card");
+
+    BatteryData bData;
+    if (DeyeBmsDecoder::getInstance().getBatteryData(bData)) {
+        LOG_PRINTF(">>> BATTERY STATUS: SOC: %u%% | SOH: %u%% | Volt: %.2fV | Curr: %+.1fA | Power: %+.2fkW | Temp: %.1fC\n",
+                   bData.soc_percent, bData.soh_percent, bData.voltage_V, bData.current_A, bData.power_W / 1000.0f, bData.temperature_C);
+        LOG_PRINTF("    Cells: Min %.3fV, Max %.3fV (dV: %.0fmV) | Capacity: %uAh | Modules: %u\n",
+                   bData.minCellVoltage_V, bData.maxCellVoltage_V, bData.cellDelta_mV, bData.totalCapacity_Ah, bData.moduleCount);
+        LOG_PRINTF("    Limits: MaxChg %.1fA, MaxDchg %.1fA, ChgV %.2fV, Cutoff %.2fV\n",
+                   bData.chargeCurrentLimit_A, bData.dischargeCurrentLimit_A, bData.chargeVoltageLimit_V, bData.dischargeCutoffVoltage_V);
+    }
+
     LOG_PRINTLN("--------------------------------------------------------------------------------");
     LOG_PRINTLN("CAN-ID   TYPE  DLC   COUNT    INTERVAL   LAST PAYLOAD (HEX)");
     LOG_PRINTLN("--------------------------------------------------------------------------------");

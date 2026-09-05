@@ -6,6 +6,11 @@
 #include "esp_lcd_panel_ops.h"
 
 
+enum UIViewMode {
+    UI_VIEW_DASHBOARD = 0,
+    UI_VIEW_CAN_SCANNER = 1
+};
+
 class UIManager {
 public:
     static UIManager& getInstance();
@@ -25,6 +30,13 @@ public:
     // Set CAN mode (CH422G EXIO5: HIGH = CAN, LOW = USB)
     void setCanMode(bool enable);
 
+    // View Mode Management (Dashboard vs Raw CAN Scanner)
+    void setViewMode(UIViewMode mode) { _view_mode = mode; }
+    UIViewMode getViewMode() const { return _view_mode; }
+    void toggleViewMode() {
+        _view_mode = (_view_mode == UI_VIEW_DASHBOARD) ? UI_VIEW_CAN_SCANNER : UI_VIEW_DASHBOARD;
+    }
+
     // Get frame buffer pointer (if needed)
     uint16_t* getFrameBuffer() const { return _framebuffer; }
 
@@ -35,6 +47,13 @@ private:
     // Low-level CH422G I2C write
     bool writeCh422gReg(uint8_t reg_addr, uint8_t value);
     void updateCh422gOutput();
+
+    // Touch detection
+    void checkTouch();
+
+    // Render Routines
+    void drawDashboard(const BatteryData& bData, const ScannerOverview& overview);
+    void drawScanner(const ScannerOverview& overview);
 
     // Drawing primitives for RGB565 framebuffer
     void fillScreen(uint16_t color);
@@ -52,5 +71,7 @@ private:
     esp_lcd_panel_handle_t _panel_handle;
     uint16_t* _framebuffer;
     uint8_t _ch422g_out_mask;
+    UIViewMode _view_mode;
+    uint32_t _last_touch_ms;
     bool _initialized;
 };

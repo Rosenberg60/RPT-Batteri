@@ -55,9 +55,21 @@ struct BatteryData {
     float chargeVoltageLimit_V;
     float chargeCurrentLimit_A;
     float dischargeCurrentLimit_A;
+    float dischargeCutoffVoltage_V;
 
     uint16_t soc_percent;
     uint16_t soh_percent;
+    uint16_t totalCapacity_Ah;
+    uint8_t  moduleCount;
+
+    // Cell extremes & balance
+    float minCellVoltage_V;
+    float maxCellVoltage_V;
+    float cellDelta_mV;
+    float minCellTemp_C;
+    float maxCellTemp_C;
+
+    char manufacturer[16];
 
     bool chargeAllowed;
     bool dischargeAllowed;
