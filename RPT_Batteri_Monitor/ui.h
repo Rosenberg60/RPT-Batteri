@@ -7,8 +7,9 @@
 
 
 enum UIViewMode {
-    UI_VIEW_DASHBOARD = 0,
-    UI_VIEW_CAN_SCANNER = 1
+    UI_VIEW_DASHBOARD = 0,        // Page 1: Main Battery Storage Dashboard
+    UI_VIEW_CELL_DIAGNOSTICS = 1, // Page 2: Cell Balance & Voltage Diagnostics
+    UI_VIEW_CAN_SCANNER = 2       // Page 3: Raw CAN Bus Scanner
 };
 
 class UIManager {
@@ -30,11 +31,14 @@ public:
     // Set CAN mode (CH422G EXIO5: HIGH = CAN, LOW = USB)
     void setCanMode(bool enable);
 
-    // View Mode Management (Dashboard vs Raw CAN Scanner)
+    // View Mode Management (Dashboard vs Cell Diagnostics vs Raw CAN Scanner)
     void setViewMode(UIViewMode mode) { _view_mode = mode; }
     UIViewMode getViewMode() const { return _view_mode; }
+    void setPage(uint8_t page) {
+        if (page <= 2) _view_mode = (UIViewMode)page;
+    }
     void toggleViewMode() {
-        _view_mode = (_view_mode == UI_VIEW_DASHBOARD) ? UI_VIEW_CAN_SCANNER : UI_VIEW_DASHBOARD;
+        _view_mode = (UIViewMode)((_view_mode + 1) % 3);
     }
 
     // Get frame buffer pointer (if needed)
@@ -48,12 +52,14 @@ private:
     bool writeCh422gReg(uint8_t reg_addr, uint8_t value);
     void updateCh422gOutput();
 
-    // Touch detection
+    // Touch detection (with coordinate mapping)
     void checkTouch();
 
-    // Render Routines
+    // Render Routines (Pages 1, 2, 3)
     void drawDashboard(const BatteryData& bData, const ScannerOverview& overview);
+    void drawCellDiagnostics(const BatteryData& bData, const ScannerOverview& overview);
     void drawScanner(const ScannerOverview& overview);
+    void drawBottomNav(uint8_t activePage);
 
     // Drawing primitives for RGB565 framebuffer
     void fillScreen(uint16_t color);

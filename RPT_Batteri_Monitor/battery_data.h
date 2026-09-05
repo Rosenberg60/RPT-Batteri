@@ -68,6 +68,8 @@ struct BatteryData {
     float cellDelta_mV;
     float minCellTemp_C;
     float maxCellTemp_C;
+    float cellVoltages[16];
+    bool  individualCellsKnown;
 
     char manufacturer[16];
 

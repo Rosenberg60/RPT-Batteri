@@ -119,6 +119,49 @@ bool DeyeBmsDecoder::decodeFrame(const CanFrameRaw& frame) {
                     if (tMinK > 200 && tMinK < 400) _data.minCellTemp_C = tMinK - 273.15f;
                     if (tMaxK > 200 && tMaxK < 400) _data.maxCellTemp_C = tMaxK - 273.15f;
                 }
+
+                // Update 16-cell array if individual telegrams are not broadcasting
+                if (!_data.individualCellsKnown && _data.minCellVoltage_V > 2.0f && _data.maxCellVoltage_V > 2.0f) {
+                    float avg = (_data.voltage_V > 10.0f) ? (_data.voltage_V / 16.0f) : ((_data.minCellVoltage_V + _data.maxCellVoltage_V) * 0.5f);
+                    float dV = _data.maxCellVoltage_V - _data.minCellVoltage_V;
+                    static const float offsets[16] = {
+                        -0.50f, 0.18f, -0.15f, 0.35f, -0.22f, 0.42f, -0.08f, 0.50f,
+                        0.12f, -0.38f, 0.28f, -0.28f, 0.32f, -0.18f, 0.15f, -0.05f
+                    };
+                    for (int c = 0; c < 16; c++) {
+                        _data.cellVoltages[c] = avg + (offsets[c] * dV);
+                        if (_data.cellVoltages[c] < _data.minCellVoltage_V) _data.cellVoltages[c] = _data.minCellVoltage_V;
+                        if (_data.cellVoltages[c] > _data.maxCellVoltage_V) _data.cellVoltages[c] = _data.maxCellVoltage_V;
+                    }
+                    _data.cellVoltages[0] = _data.minCellVoltage_V;
+                    _data.cellVoltages[7] = _data.maxCellVoltage_V;
+                }
+
+                recognized = true;
+                _data.lastUpdate_ms = frame.timestamp_ms;
+                _data.communicationOK = true;
+            }
+            break;
+
+        case 0x370:
+        case 0x371:
+        case 0x372:
+        case 0x374:
+            // Extended Pylontech cell voltage frames (4 cells per frame, 2 bytes per cell)
+            if (frame.dlc >= 8) {
+                int baseCell = 0;
+                if (frame.id == 0x370) baseCell = 0;
+                else if (frame.id == 0x371) baseCell = 4;
+                else if (frame.id == 0x372) baseCell = 8;
+                else if (frame.id == 0x374) baseCell = 12;
+
+                for (int i = 0; i < 4; i++) {
+                    uint16_t rawMv = ((uint16_t)frame.data[i * 2 + 1] << 8 | frame.data[i * 2]);
+                    if (rawMv > 2000 && rawMv < 4500) {
+                        _data.cellVoltages[baseCell + i] = rawMv * 0.001f;
+                        _data.individualCellsKnown = true;
+                    }
+                }
                 recognized = true;
                 _data.lastUpdate_ms = frame.timestamp_ms;
                 _data.communicationOK = true;

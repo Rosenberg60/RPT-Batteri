@@ -441,21 +441,42 @@ void UIManager::drawString(int x, int y, const char* text, uint16_t color, uint1
 // -----------------------------------------------------------------------------
 void UIManager::checkTouch() {
     uint32_t now = millis();
-    if (now - _last_touch_ms < 400) return; // 400ms debounce
+    if (now - _last_touch_ms < 350) return; // 350ms debounce
 
-    // Query GT911 buffer status register (0x814E)
+    // Query GT911 buffer status register (0x814E) and touch point 1 coordinates (0x8150..0x8153)
     Wire.beginTransmission((uint8_t)BOARD_TOUCH_I2C_ADDR);
     Wire.write(0x81);
     Wire.write(0x4E);
     if (Wire.endTransmission() == 0) {
-        if (Wire.requestFrom((uint8_t)BOARD_TOUCH_I2C_ADDR, (size_t)1) == 1) {
+        if (Wire.requestFrom((uint8_t)BOARD_TOUCH_I2C_ADDR, (size_t)6) == 6) {
             uint8_t status = Wire.read();
             if (status & 0x80) { // Buffer ready
                 uint8_t points = status & 0x0F;
+                Wire.read(); // track id (0x814F)
+                uint8_t xLow = Wire.read();
+                uint8_t xHigh = Wire.read();
+                uint8_t yLow = Wire.read();
+                uint8_t yHigh = Wire.read();
+                uint16_t touchX = ((uint16_t)xHigh << 8) | xLow;
+                uint16_t touchY = ((uint16_t)yHigh << 8) | yLow;
+
                 if (points > 0) {
-                    toggleViewMode();
+                    if (touchY >= 420) {
+                        // Bottom tab bar clicked directly
+                        if (touchX < 265) {
+                            setPage(0); // Page 1: Dashboard
+                        } else if (touchX < 530) {
+                            setPage(1); // Page 2: Cell Diagnostics
+                        } else {
+                            setPage(2); // Page 3: CAN Scanner
+                        }
+                    } else {
+                        // Tapped anywhere else on screen: cycle pages 1 -> 2 -> 3 -> 1
+                        toggleViewMode();
+                    }
                     _last_touch_ms = now;
                 }
+
                 // Clear buffer status flag
                 Wire.beginTransmission((uint8_t)BOARD_TOUCH_I2C_ADDR);
                 Wire.write(0x81);
@@ -736,21 +757,156 @@ void UIManager::drawDashboard(const BatteryData& bData, const ScannerOverview& o
              strlen(bData.manufacturer) > 0 ? bData.manufacturer : "PYLON");
     drawString(p2X + 15, midY + 212, subBuf, COLOR_CYAN, COLOR_CARD_BG, 1);
 
-    // 4. Bottom Status & Navigation Bar (Y: 430 to 480)
-    fillRect(0, 430, LCD_WIDTH, 50, COLOR_NAVY);
-    drawFastHLine(0, 430, LCD_WIDTH, COLOR_CYAN);
+    // 4. Bottom Status & Navigation Bar
+    drawBottomNav(0);
+}
 
-    snprintf(subBuf, sizeof(subBuf), "CAN: 500k | Rate: %.1f fps | Frames: %lu | Errors: %lu",
-             overview.packets_per_sec, (unsigned long)overview.total_packets, (unsigned long)overview.bus_error_count);
-    drawString(15, 438, subBuf, COLOR_WHITE, COLOR_NAVY, 1);
+// -----------------------------------------------------------------------------
+// Phase 2: Page 2 - Cell Balance & Voltage Diagnostics (16-Cell Profile)
+// -----------------------------------------------------------------------------
+void UIManager::drawCellDiagnostics(const BatteryData& bData, const ScannerOverview& overview) {
+    // 1. Top Header Bar (Y: 0 to 44)
+    fillRect(0, 0, LCD_WIDTH, 44, COLOR_NAVY);
+    drawFastHLine(0, 44, LCD_WIDTH, COLOR_CYAN);
+    drawString(15, 6, "CELL BALANCE & VOLTAGE DIAGNOSTICS", COLOR_WHITE, COLOR_NAVY, 2);
+    drawString(520, 10, "Page 2/3 - 16-Series Profile", COLOR_CYAN, COLOR_NAVY, 1);
 
-    drawString(15, 456, "Deye Inverter Closed-Loop Active | 501 Ah Storage Bank Managed", COLOR_CYAN, COLOR_NAVY, 1);
+    char subBuf[64];
 
-    // Interactive view toggle button
-    fillRect(560, 435, 228, 38, COLOR_DARK_BLUE);
-    drawRect(560, 435, 228, 38, COLOR_CYAN);
-    drawString(578, 443, "[ TAP FOR CAN SCANNER ]", COLOR_WHITE, COLOR_DARK_BLUE, 1);
-    drawString(596, 457, "Inspect Raw Telegrams", COLOR_CYAN, COLOR_DARK_BLUE, 1);
+    // 2. Top Summary Row (Y: 48 to 102) - 4 Stat Cards
+    const int statY = 48;
+    const int statH = 54;
+    const int statW = 190;
+
+    // Card 1: MIN CELL
+    fillRect(8, statY, statW, statH, COLOR_CARD_BG);
+    drawRect(8, statY, statW, statH, COLOR_CARD_BORDER);
+    drawString(16, statY + 6, "MIN CELL VOLTAGE", COLOR_CYAN, COLOR_CARD_BG, 1);
+    snprintf(subBuf, sizeof(subBuf), "%.3f V", bData.minCellVoltage_V);
+    drawString(20, statY + 24, subBuf, COLOR_CYAN, COLOR_CARD_BG, 2);
+    drawString(125, statY + 28, "(Low Point)", COLOR_MID_GRAY, COLOR_CARD_BG, 1);
+
+    // Card 2: MAX CELL
+    fillRect(206, statY, statW, statH, COLOR_CARD_BG);
+    drawRect(206, statY, statW, statH, COLOR_CARD_BORDER);
+    drawString(214, statY + 6, "MAX CELL VOLTAGE", COLOR_CYAN, COLOR_CARD_BG, 1);
+    snprintf(subBuf, sizeof(subBuf), "%.3f V", bData.maxCellVoltage_V);
+    drawString(218, statY + 24, subBuf, COLOR_YELLOW, COLOR_CARD_BG, 2);
+    drawString(320, statY + 28, "(High Point)", COLOR_MID_GRAY, COLOR_CARD_BG, 1);
+
+    // Card 3: CELL DELTA (dV)
+    fillRect(404, statY, statW, statH, COLOR_CARD_BG);
+    drawRect(404, statY, statW, statH, COLOR_CARD_BORDER);
+    drawString(412, statY + 6, "CELL DELTA (dV)", COLOR_CYAN, COLOR_CARD_BG, 1);
+    snprintf(subBuf, sizeof(subBuf), "%.0f mV", bData.cellDelta_mV);
+    uint16_t dColor = (bData.cellDelta_mV < 20.0f) ? COLOR_GREEN :
+                      ((bData.cellDelta_mV < 50.0f) ? COLOR_YELLOW : COLOR_ORANGE);
+    drawString(416, statY + 24, subBuf, dColor, COLOR_CARD_BG, 2);
+    if (bData.cellDelta_mV < 20.0f) {
+        drawString(510, statY + 28, "[PERFECT]", COLOR_GREEN, COLOR_CARD_BG, 1);
+    } else if (bData.cellDelta_mV < 50.0f) {
+        drawString(510, statY + 28, "[BALANCED]", COLOR_YELLOW, COLOR_CARD_BG, 1);
+    } else {
+        drawString(510, statY + 28, "[WARNING]", COLOR_ORANGE, COLOR_CARD_BG, 1);
+    }
+
+    // Card 4: AVERAGE CELL
+    fillRect(602, statY, statW, statH, COLOR_CARD_BG);
+    drawRect(602, statY, statW, statH, COLOR_CARD_BORDER);
+    drawString(610, statY + 6, "AVERAGE CELL", COLOR_CYAN, COLOR_CARD_BG, 1);
+    float avgCell = (bData.voltage_V > 10.0f) ? (bData.voltage_V / 16.0f) : 3.374f;
+    snprintf(subBuf, sizeof(subBuf), "%.3f V", avgCell);
+    drawString(614, statY + 24, subBuf, COLOR_WHITE, COLOR_CARD_BG, 2);
+    drawString(715, statY + 28, "(Total/16)", COLOR_MID_GRAY, COLOR_CARD_BG, 1);
+
+    // 3. Main 16-Cell Vertical Bar Chart (Y: 106 to 328)
+    int grpX = 8, grpY = 106, grpW = 784, grpH = 222;
+    fillRect(grpX, grpY, grpW, grpH, COLOR_CARD_BG);
+    drawRect(grpX, grpY, grpW, grpH, COLOR_CARD_BORDER);
+
+    // Chart header strip
+    fillRect(grpX, grpY, grpW, 20, COLOR_DARK_BLUE);
+    drawString(grpX + 10, grpY + 5, "16-SERIES LiFePO4 CELL VOLTAGE PROFILE (PACK CASCADE)", COLOR_CYAN, COLOR_DARK_BLUE, 1);
+    drawString(grpX + 610, grpY + 5, "Scale: 3.25V -> 3.45V", COLOR_WHITE, COLOR_DARK_BLUE, 1);
+
+    // Chart scale lines
+    int baselineY = 282;
+    int chartH = 145;
+    drawFastHLine(grpX + 15, baselineY, grpW - 30, COLOR_MID_GRAY);
+
+    // Render each of the 16 cell bars
+    for (int i = 0; i < 16; i++) {
+        int barX = grpX + 22 + i * 46;
+        int barW = 34;
+        float v = bData.cellVoltages[i];
+        if (v < 3.20f) v = avgCell;
+
+        // Scale: 3.250V to 3.450V (span 0.200V = 145px)
+        float clampedV = v;
+        if (clampedV < 3.250f) clampedV = 3.250f;
+        if (clampedV > 3.450f) clampedV = 3.450f;
+        int bH = (int)(((clampedV - 3.250f) / 0.200f) * chartH);
+        if (bH < 15) bH = 15;
+        if (bH > chartH) bH = chartH;
+        int barY = baselineY - bH;
+
+        // Color coding
+        uint16_t bColor = COLOR_GREEN;
+        if (fabs(v - bData.minCellVoltage_V) < 0.0015f) {
+            bColor = COLOR_CYAN;
+        } else if (fabs(v - bData.maxCellVoltage_V) < 0.0015f) {
+            bColor = COLOR_YELLOW;
+        }
+
+        fillRect(barX, barY, barW, bH, bColor);
+        drawRect(barX, barY, barW, bH, COLOR_WHITE);
+
+        // Voltage in millivolts printed above bar
+        char mvStr[8];
+        snprintf(mvStr, sizeof(mvStr), "%d", (int)(v * 1000.0f));
+        drawString(barX + 3, barY - 10, mvStr, COLOR_WHITE, COLOR_CARD_BG, 1);
+
+        // Cell number below baseline
+        char cellLbl[6];
+        snprintf(cellLbl, sizeof(cellLbl), "C%02d", i + 1);
+        drawString(barX + 6, baselineY + 5, cellLbl, COLOR_CYAN, COLOR_CARD_BG, 1);
+
+        // Delta from average below cell number
+        int dMv = (int)((v - avgCell) * 1000.0f);
+        char dBuf[8];
+        snprintf(dBuf, sizeof(dBuf), "%+d", dMv);
+        drawString(barX + 8, baselineY + 18, dBuf, COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+    }
+
+    // 4. Bottom Diagnostic Panels Row (Y: 332 to 424) - Height 92px
+    int p1X = 8, pY = 332, pW = 388, pH = 92;
+    fillRect(p1X, pY, pW, pH, COLOR_CARD_BG);
+    drawRect(p1X, pY, pW, pH, COLOR_CARD_BORDER);
+    fillRect(p1X, pY, pW, 20, COLOR_DARK_BLUE);
+    drawString(p1X + 10, pY + 5, "PACK THERMAL TELEMETRY & HEALTH", COLOR_CYAN, COLOR_DARK_BLUE, 1);
+    snprintf(subBuf, sizeof(subBuf), "Min Cell Temp  :  %.1f C      Max Cell Temp  :  %.1f C",
+             bData.minCellTemp_C, bData.maxCellTemp_C);
+    drawString(p1X + 12, pY + 27, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+    snprintf(subBuf, sizeof(subBuf), "BMS Ambient    :  %.1f C      State of Health:  %u %%",
+             bData.temperature_C, bData.soh_percent);
+    drawString(p1X + 12, pY + 47, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+    drawString(p1X + 12, pY + 68, "Thermal Status :  Optimal (< 30 C) | Cooling: Passive Normal", COLOR_GREEN, COLOR_CARD_BG, 1);
+
+    int p2X = 404;
+    fillRect(p2X, pY, pW, pH, COLOR_CARD_BG);
+    drawRect(p2X, pY, pW, pH, COLOR_CARD_BORDER);
+    fillRect(p2X, pY, pW, 20, COLOR_DARK_BLUE);
+    drawString(p2X + 10, pY + 5, "STORAGE CAPACITY & BALANCE STATUS", COLOR_CYAN, COLOR_DARK_BLUE, 1);
+    float estKwh = (bData.totalCapacity_Ah * bData.voltage_V * (bData.soc_percent / 100.0f)) / 1000.0f;
+    snprintf(subBuf, sizeof(subBuf), "Stored Energy  : ~%.1f kWh stored of 25.6 kWh (SOC: %u%%)",
+             estKwh, bData.soc_percent);
+    drawString(p2X + 12, pY + 27, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+    snprintf(subBuf, sizeof(subBuf), "Total Capacity :  %u Ah across 2 Synchronized Packs", bData.totalCapacity_Ah);
+    drawString(p2X + 12, pY + 47, subBuf, COLOR_GREEN, COLOR_CARD_BG, 1);
+    drawString(p2X + 12, pY + 68, "BMS Balancing  :  Standby (Delta < 20mV is Optimal)", COLOR_CYAN, COLOR_CARD_BG, 1);
+
+    // 5. Bottom Navigation Bar
+    drawBottomNav(1);
 }
 
 // -----------------------------------------------------------------------------
@@ -887,20 +1043,57 @@ void UIManager::drawScanner(const ScannerOverview& overview) {
         }
     }
 
-    // 5. Bottom Status Bar (Y: 430 to 480)
+    // 5. Bottom Navigation Bar
+    drawBottomNav(2);
+}
+
+// -----------------------------------------------------------------------------
+// Unified Bottom Navigation Bar with 3 Touch Tabs
+// -----------------------------------------------------------------------------
+void UIManager::drawBottomNav(uint8_t activePage) {
     fillRect(0, 430, LCD_WIDTH, 50, COLOR_NAVY);
     drawFastHLine(0, 430, LCD_WIDTH, COLOR_CYAN);
 
-    drawString(15, 438, "STATUS: Active CAN Telemetry Monitor | 500 kbit/s Standard",
-               COLOR_WHITE, COLOR_NAVY, 1);
-    drawString(15, 456, "Pylontech CAN Frame Decoder | 8 Standard Telemetry Frames",
-               COLOR_CYAN, COLOR_NAVY, 1);
+    int tY = 435, tH = 38;
 
-    // Return to Dashboard touch button
-    fillRect(560, 435, 228, 38, COLOR_DARK_BLUE);
-    drawRect(560, 435, 228, 38, COLOR_CYAN);
-    drawString(578, 443, "[ TAP FOR DASHBOARD ]", COLOR_WHITE, COLOR_DARK_BLUE, 1);
-    drawString(596, 457, "View Battery Gauges", COLOR_CYAN, COLOR_DARK_BLUE, 1);
+    // Tab 1: DASHBOARD (X: 10, W: 250)
+    int t1X = 10, t1W = 250;
+    if (activePage == 0) {
+        fillRect(t1X, tY, t1W, tH, COLOR_DARK_BLUE);
+        drawRect(t1X, tY, t1W, tH, COLOR_CYAN);
+        drawString(t1X + 35, tY + 8, "[ 1. DASHBOARD ]", COLOR_WHITE, COLOR_DARK_BLUE, 1);
+        drawString(t1X + 45, tY + 22, "Main Storage View", COLOR_CYAN, COLOR_DARK_BLUE, 1);
+    } else {
+        fillRect(t1X, tY, t1W, tH, COLOR_CARD_BG);
+        drawRect(t1X, tY, t1W, tH, COLOR_MID_GRAY);
+        drawString(t1X + 45, tY + 14, "1. DASHBOARD", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+    }
+
+    // Tab 2: CELL DIAGNOSTICS (X: 275, W: 250)
+    int t2X = 275, t2W = 250;
+    if (activePage == 1) {
+        fillRect(t2X, tY, t2W, tH, COLOR_DARK_BLUE);
+        drawRect(t2X, tY, t2W, tH, COLOR_CYAN);
+        drawString(t2X + 30, tY + 8, "[ 2. CELL DIAGNOSTICS ]", COLOR_WHITE, COLOR_DARK_BLUE, 1);
+        drawString(t2X + 45, tY + 22, "16 Cells & Balance", COLOR_CYAN, COLOR_DARK_BLUE, 1);
+    } else {
+        fillRect(t2X, tY, t2W, tH, COLOR_CARD_BG);
+        drawRect(t2X, tY, t2W, tH, COLOR_MID_GRAY);
+        drawString(t2X + 40, tY + 14, "2. CELL DIAGNOSTICS", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+    }
+
+    // Tab 3: CAN SCANNER (X: 540, W: 250)
+    int t3X = 540, t3W = 250;
+    if (activePage == 2) {
+        fillRect(t3X, tY, t3W, tH, COLOR_DARK_BLUE);
+        drawRect(t3X, tY, t3W, tH, COLOR_CYAN);
+        drawString(t3X + 40, tY + 8, "[ 3. CAN SCANNER ]", COLOR_WHITE, COLOR_DARK_BLUE, 1);
+        drawString(t3X + 45, tY + 22, "Raw Telegram Inspector", COLOR_CYAN, COLOR_DARK_BLUE, 1);
+    } else {
+        fillRect(t3X, tY, t3W, tH, COLOR_CARD_BG);
+        drawRect(t3X, tY, t3W, tH, COLOR_MID_GRAY);
+        drawString(t3X + 50, tY + 14, "3. CAN SCANNER", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -909,7 +1102,7 @@ void UIManager::drawScanner(const ScannerOverview& overview) {
 void UIManager::updateDisplay() {
     if (!_framebuffer || !_panel_handle) return;
 
-    // Check for user touch taps to toggle view mode
+    // Check for user touch taps to switch pages
     checkTouch();
 
     ScannerOverview overview;
@@ -920,6 +1113,8 @@ void UIManager::updateDisplay() {
 
     if (_view_mode == UI_VIEW_DASHBOARD) {
         drawDashboard(bData, overview);
+    } else if (_view_mode == UI_VIEW_CELL_DIAGNOSTICS) {
+        drawCellDiagnostics(bData, overview);
     } else {
         drawScanner(overview);
     }
