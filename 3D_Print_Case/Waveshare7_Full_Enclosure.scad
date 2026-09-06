@@ -25,11 +25,21 @@ active_w       = 155.0;
 active_h       = 87.0;
 glass_clearance= 0.45;    // Fit clearance per side (0.9mm total W/H)
 
-// 4x Factory-bonded M3 mounting studs on Waveshare board (from drawing)
-mount_hole_x_dist = 126.20; // 126.20mm horizontal spacing
-mount_hole_y_dist = 65.65;  // 65.65mm vertical spacing
-mount_boss_d      = 7.0;    // Standoff boss outer diameter
-mount_hole_d      = 3.4;    // Through hole for M3 screw into display's factory M3 brass studs
+// 4x Waveshare Factory M3 brass standoffs on back of LCD (from official drawing)
+// Horizontal distance 126.20mm, vertical 65.65mm, shifted by -1.53mm in X relative to glass
+ws_standoff_x1 = -64.63;
+ws_standoff_x2 =  61.57;
+ws_standoff_y1 =  33.80;
+ws_standoff_y2 = -31.85;
+
+// Front bezel internal clamp boss positions (anchored to top & bottom perimeter walls)
+bezel_boss_y_top =  53.5;
+bezel_boss_y_bot = -53.5;
+bezel_boss_x_dist = 100.0; // Spacing: X = +/- 50mm
+
+// LCD metal chassis body size behind the glass
+lcd_body_w     = 166.5;   // Clearance for 164.9mm LCD chassis
+lcd_body_h     = 101.5;   // Clearance for 100.0mm LCD chassis
 
 /* [18650 Battery Cradle Specs] */
 bat_d             = 18.6;   // 18650 cell diameter (+ clearance)
@@ -143,6 +153,8 @@ module battery_18650_holder() {
 // =============================================================================
 // 1. FRONT BEZEL (FLUSH SUNKEN DISPLAY + INTERNAL M3 FASTENING + SNAP-FIT)
 // =============================================================================
+// 1. FRONT BEZEL (FLUSH SUNKEN DISPLAY + PERIMETER SUPPORT SHELF + SNAP-FIT)
+// =============================================================================
 module front_bezel() {
     pw = glass_w + 2 * glass_clearance;
     ph = glass_h + 2 * glass_clearance;
@@ -152,38 +164,38 @@ module front_bezel() {
         union() {
             rounded_box(outer_w, outer_h, front_depth, corner_r);
 
-            // 4x Internal M3 fastening boss posts matching Waveshare board's factory brass studs
+            // 4x Internal Mounting Boss Lugs (Solidly merged into top and bottom walls)
             for (sx = [-1, 1]) {
-                for (sy = [-1, 1]) {
-                    translate([sx * mount_hole_x_dist / 2, sy * mount_hole_y_dist / 2, 0]) {
-                        cylinder(d=mount_boss_d, h=front_depth + 2.5);
-                    }
-                }
+                // Top boss lugs
+                translate([sx * bezel_boss_x_dist / 2, bezel_boss_y_top, 0])
+                    cylinder(d=8.0, h=front_depth - 1.8, $fn=32);
+                // Bottom boss lugs
+                translate([sx * bezel_boss_x_dist / 2, bezel_boss_y_bot, 0])
+                    cylinder(d=8.0, h=front_depth - 1.8, $fn=32);
             }
         }
 
-        // 1. Flush Sunken Glass Pocket (Drops 2.0mm from front face)
+        // 1. Flush Sunken Glass Pocket (1.8mm deep from front face)
         translate([0, 0, front_depth - glass_pocket_d])
             linear_extrude(height=glass_pocket_d + 1)
                 rounded_rect(pw, ph, pr);
 
-        // 2. Active Screen Viewing Window (Pierces through the support shelf)
+        // 2. LCD Body Pass-Through Cutout (Leaves 13.6mm side shelf & 5mm top/bottom shelf for glass)
         translate([0, 0, -1])
             linear_extrude(height=front_depth + 2)
-                rounded_rect(active_w, active_h, 3.0);
+                rounded_rect(lcd_body_w, lcd_body_h, 4.0);
 
-        // 3. Internal cavity hollow (where PCB and back case slip inside)
+        // 3. Internal cavity hollow (where back case male lip slips inside)
         translate([0, 0, -0.5])
-            linear_extrude(height=front_depth - 2.0)
+            linear_extrude(height=front_depth - 1.8)
                 rounded_rect(outer_w - 2 * wall, outer_h - 2 * wall, corner_r - wall);
 
-        // 4. M3 Screw Holes in the 4 standoffs (screws insert from inside into Waveshare's brass studs)
+        // 4. M3 Pilot Screw Holes in the 4 perimeter mounting boss lugs (for clamp brackets)
         for (sx = [-1, 1]) {
-            for (sy = [-1, 1]) {
-                translate([sx * mount_hole_x_dist / 2, sy * mount_hole_y_dist / 2, -1]) {
-                    cylinder(d=mount_hole_d, h=front_depth + 5);
-                }
-            }
+            translate([sx * bezel_boss_x_dist / 2, bezel_boss_y_top, -0.5])
+                cylinder(d=2.8, h=front_depth);
+            translate([sx * bezel_boss_x_dist / 2, bezel_boss_y_bot, -0.5])
+                cylinder(d=2.8, h=front_depth);
         }
 
         // 5. Snap-fit female retention grooves (inside top & bottom walls)
@@ -204,7 +216,92 @@ module front_bezel() {
 }
 
 // =============================================================================
-// 2. BACK CASE (WALL MOUNT + 18650 CRADLE + UNIVERSAL PORTS + SNAP-FIT LIP)
+// 2. DISPLAY REAR CLAMPING BRACKETS (TOP & BOTTOM)
+// Screws into Front Bezel lugs and into Waveshare factory M3 standoffs
+// Clamps display 100% solidly inside front bezel without visible screws!
+// =============================================================================
+module clamp_bracket_top() {
+    bracket_t = 2.5;
+    difference() {
+        union() {
+            // Horizontal bridge bar connecting the bezel bosses
+            hull() {
+                translate([-bezel_boss_x_dist/2, bezel_boss_y_top, 0])
+                    cylinder(d=10, h=bracket_t);
+                translate([ bezel_boss_x_dist/2, bezel_boss_y_top, 0])
+                    cylinder(d=10, h=bracket_t);
+            }
+            // Left tab to Waveshare factory M3 standoff
+            hull() {
+                translate([-bezel_boss_x_dist/2, bezel_boss_y_top, 0])
+                    cylinder(d=10, h=bracket_t);
+                translate([ws_standoff_x1, ws_standoff_y1, 0])
+                    cylinder(d=9, h=bracket_t);
+            }
+            // Right tab to Waveshare factory M3 standoff
+            hull() {
+                translate([bezel_boss_x_dist/2, bezel_boss_y_top, 0])
+                    cylinder(d=10, h=bracket_t);
+                translate([ws_standoff_x2, ws_standoff_y1, 0])
+                    cylinder(d=9, h=bracket_t);
+            }
+        }
+        // Holes for bezel lugs (M3 clearance)
+        translate([-bezel_boss_x_dist/2, bezel_boss_y_top, -1])
+            cylinder(d=3.4, h=bracket_t + 2);
+        translate([ bezel_boss_x_dist/2, bezel_boss_y_top, -1])
+            cylinder(d=3.4, h=bracket_t + 2);
+
+        // Holes for Waveshare factory M3 standoffs (M3 clearance)
+        translate([ws_standoff_x1, ws_standoff_y1, -1])
+            cylinder(d=3.4, h=bracket_t + 2);
+        translate([ws_standoff_x2, ws_standoff_y1, -1])
+            cylinder(d=3.4, h=bracket_t + 2);
+    }
+}
+
+module clamp_bracket_bottom() {
+    bracket_t = 2.5;
+    difference() {
+        union() {
+            // Horizontal bridge bar connecting the bezel bosses
+            hull() {
+                translate([-bezel_boss_x_dist/2, bezel_boss_y_bot, 0])
+                    cylinder(d=10, h=bracket_t);
+                translate([ bezel_boss_x_dist/2, bezel_boss_y_bot, 0])
+                    cylinder(d=10, h=bracket_t);
+            }
+            // Left tab to Waveshare factory M3 standoff
+            hull() {
+                translate([-bezel_boss_x_dist/2, bezel_boss_y_bot, 0])
+                    cylinder(d=10, h=bracket_t);
+                translate([ws_standoff_x1, ws_standoff_y2, 0])
+                    cylinder(d=9, h=bracket_t);
+            }
+            // Right tab to Waveshare factory M3 standoff
+            hull() {
+                translate([bezel_boss_x_dist/2, bezel_boss_y_bot, 0])
+                    cylinder(d=10, h=bracket_t);
+                translate([ws_standoff_x2, ws_standoff_y2, 0])
+                    cylinder(d=9, h=bracket_t);
+            }
+        }
+        // Holes for bezel lugs (M3 clearance)
+        translate([-bezel_boss_x_dist/2, bezel_boss_y_bot, -1])
+            cylinder(d=3.4, h=bracket_t + 2);
+        translate([ bezel_boss_x_dist/2, bezel_boss_y_bot, -1])
+            cylinder(d=3.4, h=bracket_t + 2);
+
+        // Holes for Waveshare factory M3 standoffs (M3 clearance)
+        translate([ws_standoff_x1, ws_standoff_y2, -1])
+            cylinder(d=3.4, h=bracket_t + 2);
+        translate([ws_standoff_x2, ws_standoff_y2, -1])
+            cylinder(d=3.4, h=bracket_t + 2);
+    }
+}
+
+// =============================================================================
+// 3. BACK CASE (WALL MOUNT + 18650 CRADLE + SUPPORT PILLARS + SNAP-FIT LIP)
 // =============================================================================
 module back_case() {
     union() {
@@ -236,9 +333,9 @@ module back_case() {
                 linear_extrude(height=back_depth + lip_height + 2)
                     rounded_rect(outer_w - 2 * wall, outer_h - 2 * wall, corner_r - wall);
 
-            // 2. Wall Mounting: 2x Keyhole slots (120mm horizontal spacing)
-            translate([-60, 22, 0]) keyhole_slot();
-            translate([ 60, 22, 0]) keyhole_slot();
+            // 2. Wall Mounting: 2x Keyhole slots (144mm horizontal spacing, outside pillars)
+            translate([-72, 22, 0]) keyhole_slot();
+            translate([ 72, 22, 0]) keyhole_slot();
 
             // 3. Central Rear Cable Pass-through (for in-wall wire box / conduit)
             translate([0, -6, -1])
@@ -266,7 +363,26 @@ module back_case() {
             }
         }
 
-        // Add 18650 Battery Snap Cradle cleanly merged into the floor
+        // 4x Rear Support Pillars: Press against Waveshare standoffs for zero-flex touch backing
+        pillar_h = 16.2;
+        overlap  = 0.3;
+        standoff_coords = [
+            [ws_standoff_x1, ws_standoff_y1],
+            [ws_standoff_x1, ws_standoff_y2],
+            [ws_standoff_x2, ws_standoff_y1],
+            [ws_standoff_x2, ws_standoff_y2]
+        ];
+        for (pt = standoff_coords) {
+            translate([pt[0], pt[1], wall - overlap]) {
+                difference() {
+                    cylinder(d=7.5, h=pillar_h + overlap, $fn=32);
+                    translate([0, 0, -1])
+                        cylinder(d=3.4, h=pillar_h + overlap + 2, $fn=24);
+                }
+            }
+        }
+
+        // 18650 Battery Snap Cradle cleanly merged into the floor
         battery_18650_holder();
     }
 }
@@ -280,10 +396,19 @@ if (part == "front") {
             front_bezel();
 } else if (part == "back") {
     back_case();
+} else if (part == "clamps") {
+    translate([0, 16 - bezel_boss_y_top, 0]) clamp_bracket_top();
+    translate([0, -16 - bezel_boss_y_bot, 0]) clamp_bracket_bottom();
 } else {
+    // Exploded view
     color("LightSlateGray", 0.9)
         translate([0, 0, back_depth + lip_height + exploded_distance])
             front_bezel();
+    color("LightCoral", 0.95)
+        translate([0, 0, back_depth + lip_height + exploded_distance - 6]) {
+            clamp_bracket_top();
+            clamp_bracket_bottom();
+        }
     color("DarkSlateGray", 0.95)
         back_case();
 }
