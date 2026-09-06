@@ -249,16 +249,14 @@ module back_case() {
             translate([0, -outer_h/2, wall + 2])
                 cube([22, wall * 3, 10], center=true);
 
-            // 5. Port Cutouts (2x USB-C + MicroSD card slot)
-            // Cutouts placed on BOTH left (-X) and right (+X) side for universal access!
-            for (sx = [-1, 1]) {
-                translate([sx * outer_w/2, 12, back_depth - 7])
-                    cube([wall * 3, 13.0, 8.0], center=true);
-                translate([sx * outer_w/2, -8, back_depth - 7])
-                    cube([wall * 3, 13.0, 8.0], center=true);
-                translate([sx * outer_w/2, -28, back_depth - 7])
-                    cube([wall * 3, 15.5, 4.5], center=true);
-            }
+            // 5. Port Cutouts (2x USB-C + MicroSD card slot) on LEFT side ONLY (-X)
+            // Right side (+X) is completely solid and closed!
+            translate([-outer_w/2, 12, back_depth - 7])
+                cube([wall * 3, 13.0, 8.0], center=true);
+            translate([-outer_w/2, -8, back_depth - 7])
+                cube([wall * 3, 13.0, 8.0], center=true);
+            translate([-outer_w/2, -28, back_depth - 7])
+                cube([wall * 3, 15.5, 4.5], center=true);
 
             // 6. Passive Cooling Ventilation Slots (over ESP32-S3 CPU & DC-DC areas)
             for (i = [-5:5]) {
