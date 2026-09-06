@@ -150,10 +150,12 @@ module battery_18650_holder() {
     }
 }
 
+// Front bezel internal mounting bosses for Mellemstykke
+mid_mount_x = 80.0; // Spacing: X = +/- 80mm
+mid_mount_y = 52.0; // Spacing: Y = +/- 52mm
+
 // =============================================================================
-// 1. FRONT BEZEL (FLUSH SUNKEN DISPLAY + INTERNAL M3 FASTENING + SNAP-FIT)
-// =============================================================================
-// 1. FRONT BEZEL (FLUSH SUNKEN DISPLAY + PERIMETER SUPPORT SHELF + SNAP-FIT)
+// 1. FRONT BEZEL (FLUSH SUNKEN DISPLAY + SHELF + BOSSES FOR MELLEMSTYKKE)
 // =============================================================================
 module front_bezel() {
     pw = glass_w + 2 * glass_clearance;
@@ -164,14 +166,12 @@ module front_bezel() {
         union() {
             rounded_box(outer_w, outer_h, front_depth, corner_r);
 
-            // 4x Internal Mounting Boss Lugs (Solidly merged into top and bottom walls)
+            // 4x Internal Mounting Bosses for Mellemstykke (Solidly merged with walls)
             for (sx = [-1, 1]) {
-                // Top boss lugs
-                translate([sx * bezel_boss_x_dist / 2, bezel_boss_y_top, 0])
-                    cylinder(d=8.0, h=front_depth - 1.8, $fn=32);
-                // Bottom boss lugs
-                translate([sx * bezel_boss_x_dist / 2, bezel_boss_y_bot, 0])
-                    cylinder(d=8.0, h=front_depth - 1.8, $fn=32);
+                for (sy = [-1, 1]) {
+                    translate([sx * mid_mount_x, sy * mid_mount_y, -5.0])
+                        cylinder(d=8.5, h=front_depth + 5.0 - 1.8, $fn=32);
+                }
             }
         }
 
@@ -181,8 +181,8 @@ module front_bezel() {
                 rounded_rect(pw, ph, pr);
 
         // 2. LCD Body Pass-Through Cutout (Leaves 13.6mm side shelf & 5mm top/bottom shelf for glass)
-        translate([0, 0, -1])
-            linear_extrude(height=front_depth + 2)
+        translate([0, 0, -6])
+            linear_extrude(height=front_depth + 8)
                 rounded_rect(lcd_body_w, lcd_body_h, 4.0);
 
         // 3. Internal cavity hollow (where back case male lip slips inside)
@@ -190,12 +190,12 @@ module front_bezel() {
             linear_extrude(height=front_depth - 1.8)
                 rounded_rect(outer_w - 2 * wall, outer_h - 2 * wall, corner_r - wall);
 
-        // 4. M3 Pilot Screw Holes in the 4 perimeter mounting boss lugs (for clamp brackets)
+        // 4. M3 Pilot Screw Holes in the 4 bosses for Mellemstykke
         for (sx = [-1, 1]) {
-            translate([sx * bezel_boss_x_dist / 2, bezel_boss_y_top, -0.5])
-                cylinder(d=2.8, h=front_depth);
-            translate([sx * bezel_boss_x_dist / 2, bezel_boss_y_bot, -0.5])
-                cylinder(d=2.8, h=front_depth);
+            for (sy = [-1, 1]) {
+                translate([sx * mid_mount_x, sy * mid_mount_y, -5.5])
+                    cylinder(d=2.8, h=10.0, $fn=24);
+            }
         }
 
         // 5. Snap-fit female retention grooves (inside top & bottom walls)
@@ -216,92 +216,71 @@ module front_bezel() {
 }
 
 // =============================================================================
-// 2. DISPLAY REAR CLAMPING BRACKETS (TOP & BOTTOM)
-// Screws into Front Bezel lugs and into Waveshare factory M3 standoffs
-// Clamps display 100% solidly inside front bezel without visible screws!
+// 2. MELLEMSTYKKE (DEDICATED DISPLAY CARRIER & MOUNTING MID-PLATE)
+// Screws to back of display via 4x Waveshare factory M3 standoffs
+// Screws to Front Bezel on inside via 4x outer corner bosses
+// Holds display 100% rigidly flush in front bezel without any screws on front!
 // =============================================================================
-module clamp_bracket_top() {
-    bracket_t = 2.5;
+module mellemstykke() {
+    mid_t = 2.5; // Sturdy 2.5mm carrier plate
+    
     difference() {
         union() {
-            // Horizontal bridge bar connecting the bezel bosses
-            hull() {
-                translate([-bezel_boss_x_dist/2, bezel_boss_y_top, 0])
-                    cylinder(d=10, h=bracket_t);
-                translate([ bezel_boss_x_dist/2, bezel_boss_y_top, 0])
-                    cylinder(d=10, h=bracket_t);
-            }
-            // Left tab to Waveshare factory M3 standoff
-            hull() {
-                translate([-bezel_boss_x_dist/2, bezel_boss_y_top, 0])
-                    cylinder(d=10, h=bracket_t);
-                translate([ws_standoff_x1, ws_standoff_y1, 0])
-                    cylinder(d=9, h=bracket_t);
-            }
-            // Right tab to Waveshare factory M3 standoff
-            hull() {
-                translate([bezel_boss_x_dist/2, bezel_boss_y_top, 0])
-                    cylinder(d=10, h=bracket_t);
-                translate([ws_standoff_x2, ws_standoff_y1, 0])
-                    cylinder(d=9, h=bracket_t);
+            // Main carrier plate
+            rounded_box(178, 116, mid_t, 6.0);
+            
+            // Stiffening outer perimeter rib
+            difference() {
+                rounded_box(178, 116, mid_t + 1.5, 6.0);
+                translate([0, 0, -1])
+                    rounded_box(172, 110, mid_t + 3.5, 4.0);
             }
         }
-        // Holes for bezel lugs (M3 clearance)
-        translate([-bezel_boss_x_dist/2, bezel_boss_y_top, -1])
-            cylinder(d=3.4, h=bracket_t + 2);
-        translate([ bezel_boss_x_dist/2, bezel_boss_y_top, -1])
-            cylinder(d=3.4, h=bracket_t + 2);
-
-        // Holes for Waveshare factory M3 standoffs (M3 clearance)
-        translate([ws_standoff_x1, ws_standoff_y1, -1])
-            cylinder(d=3.4, h=bracket_t + 2);
-        translate([ws_standoff_x2, ws_standoff_y1, -1])
-            cylinder(d=3.4, h=bracket_t + 2);
-    }
-}
-
-module clamp_bracket_bottom() {
-    bracket_t = 2.5;
-    difference() {
-        union() {
-            // Horizontal bridge bar connecting the bezel bosses
-            hull() {
-                translate([-bezel_boss_x_dist/2, bezel_boss_y_bot, 0])
-                    cylinder(d=10, h=bracket_t);
-                translate([ bezel_boss_x_dist/2, bezel_boss_y_bot, 0])
-                    cylinder(d=10, h=bracket_t);
-            }
-            // Left tab to Waveshare factory M3 standoff
-            hull() {
-                translate([-bezel_boss_x_dist/2, bezel_boss_y_bot, 0])
-                    cylinder(d=10, h=bracket_t);
-                translate([ws_standoff_x1, ws_standoff_y2, 0])
-                    cylinder(d=9, h=bracket_t);
-            }
-            // Right tab to Waveshare factory M3 standoff
-            hull() {
-                translate([bezel_boss_x_dist/2, bezel_boss_y_bot, 0])
-                    cylinder(d=10, h=bracket_t);
-                translate([ws_standoff_x2, ws_standoff_y2, 0])
-                    cylinder(d=9, h=bracket_t);
+        
+        // 1. Center opening for ESP32-S3 PCB, buttons and connectors
+        // PCB is 106x73mm centered horizontally around X=-1.53, Y=+0.975
+        translate([-1.5, 1.0, -1])
+            rounded_box(114, 76, mid_t + 4, 3.0);
+            
+        // 2. Left-side port clearance cutout (between the two left standoffs)
+        translate([-74, 0, -1])
+            cube([28, 46, mid_t + 4], center=true);
+            
+        // 3. Bottom battery clearance cutout (leaves extra room for 18650 wires)
+        translate([0, -42, -1])
+            rounded_box(88, 22, mid_t + 4, 3.0);
+            
+        // 4. 4x Screw holes for Waveshare display factory M3 standoffs
+        for (pt = [
+            [ws_standoff_x1, ws_standoff_y1],
+            [ws_standoff_x1, ws_standoff_y2],
+            [ws_standoff_x2, ws_standoff_y1],
+            [ws_standoff_x2, ws_standoff_y2]
+        ]) {
+            translate([pt[0], pt[1], -1]) {
+                cylinder(d=3.4, h=mid_t + 4, $fn=24);
+                // Counterbore for M3 screw head on back face
+                translate([0, 0, mid_t + 1 - 1.2])
+                    cylinder(d=6.2, h=3.0, $fn=32);
             }
         }
-        // Holes for bezel lugs (M3 clearance)
-        translate([-bezel_boss_x_dist/2, bezel_boss_y_bot, -1])
-            cylinder(d=3.4, h=bracket_t + 2);
-        translate([ bezel_boss_x_dist/2, bezel_boss_y_bot, -1])
-            cylinder(d=3.4, h=bracket_t + 2);
-
-        // Holes for Waveshare factory M3 standoffs (M3 clearance)
-        translate([ws_standoff_x1, ws_standoff_y2, -1])
-            cylinder(d=3.4, h=bracket_t + 2);
-        translate([ws_standoff_x2, ws_standoff_y2, -1])
-            cylinder(d=3.4, h=bracket_t + 2);
+        
+        // 5. 4x Screw holes for mounting Mellemstykke to Front Bezel bosses
+        for (sx = [-1, 1]) {
+            for (sy = [-1, 1]) {
+                translate([sx * mid_mount_x, sy * mid_mount_y, -1]) {
+                    cylinder(d=3.4, h=mid_t + 4, $fn=24);
+                    // Counterbore for M3 screw head
+                    translate([0, 0, mid_t + 1 - 1.2])
+                        cylinder(d=6.2, h=3.0, $fn=32);
+                }
+            }
+        }
     }
 }
 
 // =============================================================================
-// 3. BACK CASE (WALL MOUNT + 18650 CRADLE + SUPPORT PILLARS + SNAP-FIT LIP)
+// 3. BACK CASE (WALL MOUNT + 18650 CRADLE + SUPPORT PADS + SNAP-FIT LIP)
 // =============================================================================
 module back_case() {
     union() {
@@ -363,8 +342,8 @@ module back_case() {
             }
         }
 
-        // 4x Rear Support Pillars: Press against Waveshare standoffs for zero-flex touch backing
-        pillar_h = 16.2;
+        // 4x Rear Support Pads: Rest against Mellemstykke for zero-flex touch backing
+        pad_h    = 13.8;
         overlap  = 0.3;
         standoff_coords = [
             [ws_standoff_x1, ws_standoff_y1],
@@ -375,9 +354,9 @@ module back_case() {
         for (pt = standoff_coords) {
             translate([pt[0], pt[1], wall - overlap]) {
                 difference() {
-                    cylinder(d=7.5, h=pillar_h + overlap, $fn=32);
+                    cylinder(d=8.0, h=pad_h + overlap, $fn=32);
                     translate([0, 0, -1])
-                        cylinder(d=3.4, h=pillar_h + overlap + 2, $fn=24);
+                        cylinder(d=3.6, h=pad_h + overlap + 2, $fn=24);
                 }
             }
         }
@@ -396,19 +375,16 @@ if (part == "front") {
             front_bezel();
 } else if (part == "back") {
     back_case();
-} else if (part == "clamps") {
-    translate([0, 16 - bezel_boss_y_top, 0]) clamp_bracket_top();
-    translate([0, -16 - bezel_boss_y_bot, 0]) clamp_bracket_bottom();
+} else if (part == "mid" || part == "mellemstykke") {
+    mellemstykke();
 } else {
     // Exploded view
     color("LightSlateGray", 0.9)
-        translate([0, 0, back_depth + lip_height + exploded_distance])
+        translate([0, 0, back_depth + lip_height + exploded_distance + 15])
             front_bezel();
-    color("LightCoral", 0.95)
-        translate([0, 0, back_depth + lip_height + exploded_distance - 6]) {
-            clamp_bracket_top();
-            clamp_bracket_bottom();
-        }
+    color("MediumPurple", 0.95)
+        translate([0, 0, back_depth + lip_height + exploded_distance - 2])
+            mellemstykke();
     color("DarkSlateGray", 0.95)
         back_case();
 }
