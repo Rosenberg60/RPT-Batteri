@@ -132,8 +132,20 @@ static const uint8_t font5x7[] PROGMEM = {
 #define COLOR_CARD_BORDER   0x2965
 #define COLOR_CARD_HEADER   0x18E5
 
-// C-hook to allow other modules (like SD logger) to toggle SD_CS on CH422G
+// VSYNC tracking & IRAM-safe ISR callback to prevent crashes during Flash/WiFi ops
 static volatile bool s_vsync_occurred = false;
+
+#if defined(ESP_IDF_VERSION) && (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0))
+IRAM_ATTR static bool rgb_lcd_on_vsync_event(esp_lcd_panel_handle_t panel, const esp_lcd_rgb_panel_event_data_t *edata, void *user_ctx) {
+    s_vsync_occurred = true;
+    return false;
+}
+#else
+IRAM_ATTR static bool rgb_lcd_on_vsync_event(esp_lcd_panel_handle_t panel, esp_lcd_rgb_panel_event_data_t *edata, void *user_ctx) {
+    s_vsync_occurred = true;
+    return false;
+}
+#endif
 
 UIManager& UIManager::getInstance() {
     static UIManager instance;
@@ -251,7 +263,9 @@ bool UIManager::begin() {
     panel_conf.timings.flags.pclk_active_neg = 1; // ST7262 clock latch polarity
     panel_conf.data_width = 16;
 #if defined(ESP_IDF_VERSION) && (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0))
-    panel_conf.bounce_buffer_size_px = LCD_WIDTH * 10; // 8000 px SRAM bounce buffer avoids PSRAM DMA starvation
+    // 20 lines (16,000 px = 32KB per ping-pong buffer) in internal SRAM completely insulates
+    // GDMA from Octal PSRAM bus contention during WiFi/CPU bursts, preventing screen drift
+    panel_conf.bounce_buffer_size_px = LCD_WIDTH * 20;
 #endif
     panel_conf.sram_trans_align = 4;
     panel_conf.psram_trans_align = 64;
@@ -261,10 +275,7 @@ bool UIManager::begin() {
     panel_conf.pclk_gpio_num = LCD_PIN_PCLK;
     panel_conf.disp_gpio_num = -1;
 #if !defined(ESP_IDF_VERSION) || (ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(5, 0, 0))
-    panel_conf.on_frame_trans_done = [](esp_lcd_panel_handle_t, esp_lcd_rgb_panel_event_data_t*, void*) -> bool {
-        s_vsync_occurred = true;
-        return false;
-    };
+    panel_conf.on_frame_trans_done = rgb_lcd_on_vsync_event;
 #endif
 
     panel_conf.data_gpio_nums[0]  = LCD_PIN_DATA0;
@@ -293,10 +304,7 @@ bool UIManager::begin() {
 
 #if defined(ESP_IDF_VERSION) && (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0))
     esp_lcd_rgb_panel_event_callbacks_t cbs = {};
-    cbs.on_vsync = [](esp_lcd_panel_handle_t, const esp_lcd_rgb_panel_event_data_t*, void*) -> bool {
-        s_vsync_occurred = true;
-        return false;
-    };
+    cbs.on_vsync = rgb_lcd_on_vsync_event;
     esp_lcd_rgb_panel_register_event_callbacks(_panel_handle, &cbs, NULL);
 #endif
 
@@ -353,6 +361,14 @@ bool UIManager::begin() {
     return true;
 }
 
+void UIManager::resyncDisplay() {
+#if defined(ESP_IDF_VERSION) && (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0))
+    if (_panel_handle) {
+        esp_lcd_rgb_panel_restart(_panel_handle);
+    }
+#endif
+}
+
 void UIManager::uiTaskTrampoline(void* arg) {
     reinterpret_cast<UIManager*>(arg)->uiTask();
 }
@@ -360,12 +376,20 @@ void UIManager::uiTaskTrampoline(void* arg) {
 void UIManager::uiTask() {
     LOG_PRINTLN("[UI] Task running on Core 1.");
     uint32_t last_render_ms = 0;
+    uint32_t last_resync_ms = 0;
     UIViewMode last_mode = _view_mode;
     while (_initialized) {
         checkTouch();
         uint32_t now = millis();
         // Redraw at 2.5 Hz (every 400ms) or immediately if page changed
         if (now - last_render_ms >= 400 || _view_mode != last_mode) {
+            // Periodic GDMA resync (every 4 seconds or on page switch) resets GDMA descriptor
+            // start pointers to line 0 at the next VSYNC boundary, permanently preventing vertical screen drift
+            if (_view_mode != last_mode || (now - last_resync_ms >= 4000)) {
+                resyncDisplay();
+                last_resync_ms = now;
+            }
+
             // Wait for VSYNC frame boundary before rendering
             s_vsync_occurred = false;
             uint32_t vsync_wait_start = millis();

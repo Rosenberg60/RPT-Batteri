@@ -3,6 +3,7 @@
 #include "board_config.h"
 #include "deye_bms_decoder.h"
 #include "sd_logger.h"
+#include "ui.h"
 
 // -----------------------------------------------------------------------------
 // Embedded Modern Web Dashboard (HTML5, CSS3, JavaScript - Standalone & Zero-CDN)
@@ -412,6 +413,8 @@ void BatteryWebServer::begin() {
             WiFi.setTxPower(WIFI_POWER_8_5dBm);
             LOG_PRINTF("[WIFI] STA IP assigned: %s (RSSI: %d dBm)\n",
                        WiFi.localIP().toString().c_str(), WiFi.RSSI());
+            // Resynchronize RGB GDMA scanout immediately after connection burst
+            UIManager::getInstance().resyncDisplay();
         } else if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
             WiFi.setSleep(false);
             WiFi.setTxPower(WIFI_POWER_8_5dBm);

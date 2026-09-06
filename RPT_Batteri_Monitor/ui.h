@@ -44,6 +44,9 @@ public:
     // Get frame buffer pointer (if needed)
     uint16_t* getFrameBuffer() const { return _framebuffer; }
 
+    // Resynchronize RGB GDMA transmission at VSYNC boundary to prevent/correct screen drift
+    void resyncDisplay();
+
 private:
     UIManager();
     ~UIManager();

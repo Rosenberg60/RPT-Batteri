@@ -92,9 +92,10 @@
 // -----------------------------------------------------------------------------
 #define LCD_WIDTH                   800
 #define LCD_HEIGHT                  480
-// 16 MHz pixel clock is required by ST7262 internal PLL (must be >= 14 MHz
-// to prevent ST7262 entering RGB color-cycling BIST test mode).
-#define LCD_PIXEL_CLOCK_HZ          (16 * 1000 * 1000)
+// 15 MHz pixel clock: Safe above the ST7262 PLL threshold (> 14 MHz to prevent
+// BIST color-cycling test mode), while reducing PSRAM bus pressure by 6.25%
+// compared to 16 MHz to eliminate GDMA FIFO under-run and screen drift.
+#define LCD_PIXEL_CLOCK_HZ          (15 * 1000 * 1000)
 
 #define LCD_PIN_VSYNC               GPIO_NUM_3
 #define LCD_PIN_HSYNC               GPIO_NUM_46

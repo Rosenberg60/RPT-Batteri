@@ -1,7 +1,7 @@
 // =============================================================================
 // PROJEKT : RPT-Batterimonitor med Waveshare ESP32-S3-Touch-LCD-7 (Rev 1.2)
-// VERSION : v1.5.2 (Restored Page 1 IP Display, Full Redraw Cache Invalidation)
-// DATO/TID: 2026-09-06 11:45:00
+// VERSION : v1.5.3 (Anti-Drift 20L Bounce Buffer, 15MHz PCLK, IRAM VSYNC, Auto-Resync)
+// DATO/TID: 2026-09-06 12:05:00
 // =============================================================================
 
 #include <Arduino.h>
@@ -25,7 +25,7 @@ void printStartupBanner() {
     LOG_PRINTLN("   RPT & ROSEN BATTERY STORAGE DASHBOARD - PHASE 2");
     LOG_PRINTLN("   Target Hardware: Waveshare ESP32-S3-Touch-LCD-7 (Rev 1.2)");
     LOG_PRINTLN("   Screen: 7.0 inch IPS RGB (800x480) - ST7262 Driver");
-    LOG_PRINTLN("   Firmware Date  : 2026-09-06 11:45:00 (v1.5.2 Restored Page 1 IP)");
+    LOG_PRINTLN("   Firmware Date  : 2026-09-06 12:05:00 (v1.5.3 Anti-Drift & Auto-Resync)");
     LOG_PRINTF( "   Compile Time   : %s %s\n", __DATE__, __TIME__);
     LOG_PRINTLN("================================================================================");
     LOG_PRINTF("   CAN Controller : ESP32-S3 TWAI (TX: GPIO%d, RX: GPIO%d)\n",
