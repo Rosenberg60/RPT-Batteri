@@ -1,7 +1,7 @@
 // =============================================================================
 // PROJEKT : RPT-Batterimonitor med Waveshare ESP32-S3-Touch-LCD-7 (Rev 1.2)
-// VERSION : v1.5.3 (Anti-Drift 20L Bounce Buffer, 15MHz PCLK, IRAM VSYNC, Auto-Resync)
-// DATO/TID: 2026-09-06 12:05:00
+// VERSION : v1.6.4 (ST7262 Centered Porches, Pylontech RS485 Protocol Fixed)
+// DATO/TID: 2026-09-06 20:05:00
 // =============================================================================
 
 #include <Arduino.h>
@@ -14,6 +14,9 @@
 #include "deye_bms_decoder.h"
 #include "web_server.h"
 #include "board_battery.h"
+#include "system_config.h"
+#include "rs485_battery_manager.h"
+#include "deye_can_gateway.h"
 
 // Tracking variables for periodic serial output
 static uint32_t last_serial_stats_ms = 0;
@@ -22,16 +25,19 @@ static uint32_t last_heartbeat_ms = 0;
 
 void printStartupBanner() {
     LOG_PRINTLN("\n================================================================================");
-    LOG_PRINTLN("   RPT & ROSEN BATTERY STORAGE DASHBOARD - PHASE 2");
+    LOG_PRINTLN("   RPT & ROSEN BATTERY STORAGE DASHBOARD - PHASE 2 (MULTIDROP RS485)");
     LOG_PRINTLN("   Target Hardware: Waveshare ESP32-S3-Touch-LCD-7 (Rev 1.2)");
     LOG_PRINTLN("   Screen: 7.0 inch IPS RGB (800x480) - ST7262 Driver");
-    LOG_PRINTLN("   Firmware Date  : 2026-09-06 12:05:00 (v1.5.3 Anti-Drift & Auto-Resync)");
+    LOG_PRINTLN("   Firmware Date  : 2026-09-06 20:05:00 (v1.6.4 ST7262 Centering + Pylon 0x42 Fix)");
     LOG_PRINTF( "   Compile Time   : %s %s\n", __DATE__, __TIME__);
     LOG_PRINTLN("================================================================================");
     LOG_PRINTF("   CAN Controller : ESP32-S3 TWAI (TX: GPIO%d, RX: GPIO%d)\n",
                   BOARD_CAN_TX_PIN, BOARD_CAN_RX_PIN);
+    LOG_PRINTF("   RS485 Port     : UART1 (TX: GPIO%d, RX: GPIO%d, 9600 baud Multidrop)\n",
+                  BOARD_RS485_TX_PIN, BOARD_RS485_RX_PIN);
+    LOG_PRINTLN("   Deye Gateway   : Pylontech CAN Emulation to Inverter (0x351/355/356/359/35C/35E)");
 #if BOARD_CAN_POINT_TO_POINT
-    LOG_PRINTLN("   CAN Mode       : POINT-TO-POINT (Hardware ACK active, Zero Software TX)");
+    LOG_PRINTLN("   CAN Mode       : POINT-TO-POINT (Hardware ACK active)");
     LOG_PRINTLN("   Termination    : Jumper 13 MUST BE INSTALLED/ON (120 Ohm bus termination)");
 #else
     LOG_PRINTLN("   CAN Mode       : LISTEN-ONLY (Passive, No Transmit, No ACK)");
@@ -60,18 +66,36 @@ void printSerialIdStatistics() {
                   (unsigned long)overview.bus_error_count,
                   overview.sd_card_mounted ? overview.sd_filename : "No SD card");
 
+#include "system_config.h"
+
     BatteryData bData;
     if (DeyeBmsDecoder::getInstance().getBatteryData(bData)) {
+        const char* mName = SystemConfig::getInstance().getBrandName(SystemConfig::getInstance().getMaster());
+        const char* sName = SystemConfig::getInstance().getBrandName(SystemConfig::getInstance().getSlave());
         LOG_PRINTF(">>> BATTERY STATUS: SOC: %u%% | SOH: %u%% | Volt: %.2fV | Curr: %+.1fA | Power: %+.2fkW | Temp: %.1fC\n",
                    bData.soc_percent, bData.soh_percent, bData.voltage_V, bData.current_A, bData.power_W / 1000.0f, bData.temperature_C);
-        LOG_PRINTF(">>> DUAL-PACK: Total(Målt): %+.1fA | Rosen(Est.40%%): %+.1fA (%+.2fkW) | RPT(Est.60%%): %+.1fA (%+.2fkW)\n",
-                   bData.current_A,
-                   bData.pack1_current_A, bData.pack1_power_W / 1000.0f,
-                   bData.pack2_current_A, bData.pack2_power_W / 1000.0f);
+        LOG_PRINTF(">>> MASTER (%s): %+.1fA (%+.2fkW) | SLAVE (%s): %s\n",
+                   mName, bData.pack1_current_A, bData.pack1_power_W / 1000.0f,
+                   sName, bData.pack2_online ? "ONLINE" : "OFFLINE");
         LOG_PRINTF("    Cells: Min %.3fV, Max %.3fV (dV: %.0fmV) | Capacity: %uAh | Modules: %u\n",
                    bData.minCellVoltage_V, bData.maxCellVoltage_V, bData.cellDelta_mV, bData.totalCapacity_Ah, bData.moduleCount);
         LOG_PRINTF("    Limits: MaxChg %.1fA, MaxDchg %.1fA, ChgV %.2fV, Cutoff %.2fV\n",
                    bData.chargeCurrentLimit_A, bData.dischargeCurrentLimit_A, bData.chargeVoltageLimit_V, bData.dischargeCutoffVoltage_V);
+        LOG_PRINTF(">>> RS485 MULTIDROP: %s | RX: %lu frames, Err: %lu | Active Proto: %s\n",
+                   bData.rs485_online ? "ONLINE" : "POLLING...",
+                   (unsigned long)bData.rs485_rx_count,
+                   (unsigned long)bData.rs485_err_count,
+                   Rs485BatteryManager::getInstance().getActiveProtocol() == RS485_PROTO_MODBUS_RTU ? "Modbus RTU" :
+                   (Rs485BatteryManager::getInstance().getActiveProtocol() == RS485_PROTO_PYLON_ASCII ? "Pylontech ASCII" : "Auto-Detecting"));
+        LOG_PRINTF("    Pack 1 [%s]: %s (%.1fA, %u%% SOC, Min: %.3fV, Max: %.3fV)\n",
+                   bData.pack1_name, bData.pack1_online ? "ONLINE" : "OFFLINE",
+                   bData.pack1_current_A, bData.pack1_soc_percent, bData.pack1_minV, bData.pack1_maxV);
+        LOG_PRINTF("    Pack 2 [%s]: %s (%.1fA, %u%% SOC, Min: %.3fV, Max: %.3fV)\n",
+                   bData.pack2_name, bData.pack2_online ? "ONLINE" : "OFFLINE",
+                   bData.pack2_current_A, bData.pack2_soc_percent, bData.pack2_minV, bData.pack2_maxV);
+        LOG_PRINTF(">>> DEYE CAN GATEWAY: %s (TX Frames to Inverter: %lu)\n",
+                   DeyeCanGateway::getInstance().isEnabled() ? "ACTIVE" : "STANDBY",
+                   (unsigned long)DeyeCanGateway::getInstance().getTxCount());
     }
 
     // Report ESP32 Onboard LiPo Battery (Option A via TP1 & GPIO 6)
@@ -122,8 +146,11 @@ void setup() {
     delay(200);
 
     LOG_PRINTLN("\n\n================================================================================");
-    LOG_PRINTF( ">>> ESP32-S3 RPT BATTERY MONITOR - COMPILED: %s %s (v1.5.2) <<<\n", __DATE__, __TIME__);
+    LOG_PRINTF( ">>> ESP32-S3 RPT BATTERY MONITOR - COMPILED: %s %s (v1.6.2) <<<\n", __DATE__, __TIME__);
     printStartupBanner();
+
+    // 0. Initialize Persistent System Configuration (Master/Slave settings)
+    SystemConfig::getInstance().begin();
 
     // 1. Initialize Board LiPo Battery ADC (Option A via TP1 & GPIO 6)
     LOG_PRINTLN("[BOOT 1/6] Initializing Board LiPo Battery ADC (Option A: GPIO 6)...");
@@ -153,7 +180,7 @@ void setup() {
     SdLogger::getInstance().begin();
 
     // 6. Initialize TWAI CAN Receiver (500 kbit/s, Point-to-Point / Hardware ACK)
-    LOG_PRINTLN("[BOOT 6/6] Activating CAN Mode (CH422G EXIO5 = HIGH) & TWAI Receiver...");
+    LOG_PRINTLN("[BOOT 6/8] Activating CAN Mode (CH422G EXIO5 = HIGH) & TWAI Receiver...");
     UIManager::getInstance().setCanMode(true);
     delay(50);
     if (!CanReceiver::getInstance().begin(BOARD_CAN_DEFAULT_BAUDRATE)) {
@@ -162,7 +189,15 @@ void setup() {
         LOG_PRINTLN("[BOOT OK] CAN Receiver listening!");
     }
 
-    LOG_PRINTLN("\n[SYSTEM READY] All subsystems started. Listening for RPT battery CAN frames.\n");
+    // 7. Initialize Multidrop RS485 Battery Manager (UART1 on GPIO 15/16)
+    LOG_PRINTLN("[BOOT 7/8] Initializing Multidrop RS485 Battery Poller (Pack 1 & 2)...");
+    Rs485BatteryManager::getInstance().begin(9600);
+
+    // 8. Initialize Deye CAN Gateway (Transmits Pylontech telemetry frames to inverter)
+    LOG_PRINTLN("[BOOT 8/8] Initializing Deye CAN Gateway (Pylontech Inverter Protocol)...");
+    DeyeCanGateway::getInstance().begin();
+
+    LOG_PRINTLN("\n[SYSTEM READY] All subsystems started. Polling RS485 & Gateway active.\n");
     last_serial_stats_ms = millis();
     last_watchdog_ms = millis();
     last_heartbeat_ms = millis();
@@ -235,6 +270,12 @@ void loop() {
         DeyeBmsDecoder::getInstance().checkWatchdog(5000);
         last_watchdog_ms = now;
     }
+
+    // Service RS485 Multidrop Battery Poller
+    Rs485BatteryManager::getInstance().update();
+
+    // Service Deye CAN BMS Gateway (Transmits heartbeats to Deye inverter)
+    DeyeCanGateway::getInstance().update();
 
     // Handle Web Server client requests & background WiFi reconnect
     BatteryWebServer::getInstance().loop();

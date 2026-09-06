@@ -1,5 +1,11 @@
 #pragma once
 
+// =============================================================================
+// PROJEKT : RPT-Batterimonitor med Waveshare ESP32-S3-Touch-LCD-7 (Rev 1.2)
+// MODUL   : ui.h (UI & Graphics Engine Header)
+// DATO/TID: 2026-09-06 19:32:00
+// =============================================================================
+
 #include <Arduino.h>
 #include "board_config.h"
 #include "battery_data.h"
@@ -9,7 +15,8 @@
 enum UIViewMode {
     UI_VIEW_DASHBOARD = 0,        // Page 1: Main Battery Storage Dashboard
     UI_VIEW_CELL_DIAGNOSTICS = 1, // Page 2: Cell Balance & Voltage Diagnostics
-    UI_VIEW_CAN_SCANNER = 2       // Page 3: Raw CAN Bus Scanner
+    UI_VIEW_CAN_SCANNER = 2,      // Page 3: Raw CAN Bus Scanner
+    UI_VIEW_CONFIG = 3            // Page 4: System Configuration (Master/Slave Selection)
 };
 
 class UIManager {
@@ -31,21 +38,20 @@ public:
     // Set CAN mode (CH422G EXIO5: HIGH = CAN, LOW = USB)
     void setCanMode(bool enable);
 
-    // View Mode Management (Dashboard vs Cell Diagnostics vs Raw CAN Scanner)
+    // View Mode Management (Dashboard vs Cell Diagnostics vs Raw CAN Scanner vs Config)
     void setViewMode(UIViewMode mode) { _view_mode = mode; }
     UIViewMode getViewMode() const { return _view_mode; }
     void setPage(uint8_t page) {
-        if (page <= 2) _view_mode = (UIViewMode)page;
+        if (page <= 3) _view_mode = (UIViewMode)page;
     }
     void toggleViewMode() {
-        _view_mode = (UIViewMode)((_view_mode + 1) % 3);
+        _view_mode = (UIViewMode)((_view_mode + 1) % 4);
     }
+    uint8_t getCellViewPack() const { return _cell_view_pack; }
+    void setCellViewPack(uint8_t pack) { _cell_view_pack = pack; }
 
     // Get frame buffer pointer (if needed)
     uint16_t* getFrameBuffer() const { return _framebuffer; }
-
-    // Resynchronize RGB GDMA transmission at VSYNC boundary to prevent/correct screen drift
-    void resyncDisplay();
 
 private:
     UIManager();
@@ -67,6 +73,9 @@ private:
 
     void drawStaticScanner();
     void updateDynamicScanner(const ScannerOverview& overview, const BatteryData& bData);
+
+    void drawStaticConfig();
+    void updateDynamicConfig(const BatteryData& bData);
 
     void drawBottomNav(uint8_t activePage);
 
@@ -90,6 +99,7 @@ private:
     uint8_t _ch422g_out_mask;
     UIViewMode _view_mode;
     UIViewMode _last_drawn_mode;
+    uint8_t _cell_view_pack;
     uint32_t _last_touch_ms;
     bool _initialized;
     bool _is_direct_fb;

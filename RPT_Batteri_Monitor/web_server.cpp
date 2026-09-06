@@ -1,9 +1,16 @@
+// =============================================================================
+// PROJEKT : RPT-Batterimonitor med Waveshare ESP32-S3-Touch-LCD-7 (Rev 1.2)
+// MODUL   : web_server.cpp (Embedded Web Dashboard & Telemetry JSON API)
+// DATO/TID: 2026-09-06 19:32:00
+// =============================================================================
+
 #include "web_server.h"
 #include "wifi_config.h"
 #include "board_config.h"
 #include "deye_bms_decoder.h"
 #include "sd_logger.h"
 #include "ui.h"
+#include "system_config.h"
 
 // -----------------------------------------------------------------------------
 // Embedded Modern Web Dashboard (HTML5, CSS3, JavaScript - Standalone & Zero-CDN)
@@ -106,9 +113,9 @@ footer { text-align: center; font-size: 0.8rem; color: var(--text-muted); margin
         <div class="bar-track">
           <div id="bar-soc" class="bar-fill" style="width:0%; background:var(--green);"></div>
         </div>
-        <div class="metric-sub"><span class="lbl">Rosen 200Ah Master:</span><span id="val-p1-soc" class="val" style="color:var(--cyan);">-- %</span></div>
-        <div class="metric-sub"><span class="lbl">RPT 300Ah Slave:</span><span id="val-p2-soc" class="val" style="color:var(--green);">-- %</span></div>
-        <div class="metric-sub"><span class="lbl">Total Bank Kapacitet:</span><span id="val-cap" class="val">501 Ah</span></div>
+        <div class="metric-sub"><span id="lbl-p1-soc" class="lbl">Master:</span><span id="val-p1-soc" class="val" style="color:var(--cyan);">-- %</span></div>
+        <div class="metric-sub"><span id="lbl-p2-soc" class="lbl">Slave:</span><span id="val-p2-soc" class="val" style="color:var(--green);">-- %</span></div>
+        <div class="metric-sub"><span class="lbl">Total Bank Kapacitet:</span><span id="val-cap" class="val">500 Ah</span></div>
       </div>
     </div>
 
@@ -120,8 +127,8 @@ footer { text-align: center; font-size: 0.8rem; color: var(--text-muted); margin
       </div>
       <div class="card-body">
         <div id="val-current" class="metric-hero">--.- A</div>
-        <div class="metric-sub"><span class="lbl">Rosen 200Ah (Est 40%):</span><span id="val-p1-curr" class="val" style="color:var(--cyan);">--.- A</span></div>
-        <div class="metric-sub"><span class="lbl">RPT 300Ah (Est 60%):</span><span id="val-p2-curr" class="val" style="color:var(--green);">--.- A</span></div>
+        <div class="metric-sub"><span id="lbl-p1-curr" class="lbl">Master Strøm:</span><span id="val-p1-curr" class="val" style="color:var(--cyan);">--.- A</span></div>
+        <div class="metric-sub"><span id="lbl-p2-curr" class="lbl">Slave Strøm:</span><span id="val-p2-curr" class="val" style="color:var(--green);">--.- A</span></div>
         <div class="metric-sub"><span class="lbl">Maks Bank Ladegrænse:</span><span id="val-chg-lim" class="val">390 A</span></div>
         <div class="metric-sub"><span class="lbl">Maks Bank Afladegrænse:</span><span id="val-dchg-lim" class="val">390 A</span></div>
       </div>
@@ -150,8 +157,8 @@ footer { text-align: center; font-size: 0.8rem; color: var(--text-muted); margin
       </div>
       <div class="card-body">
         <div id="val-power" class="metric-hero">0.00 kW</div>
-        <div class="metric-sub"><span class="lbl">Rosen 200Ah Effekt:</span><span id="val-p1-pwr" class="val" style="color:var(--cyan);">0.00 kW</span></div>
-        <div class="metric-sub"><span class="lbl">RPT 300Ah Effekt:</span><span id="val-p2-pwr" class="val" style="color:var(--green);">0.00 kW</span></div>
+        <div class="metric-sub"><span id="lbl-p1-pwr" class="lbl">Master Effekt:</span><span id="val-p1-pwr" class="val" style="color:var(--cyan);">0.00 kW</span></div>
+        <div class="metric-sub"><span id="lbl-p2-pwr" class="lbl">Slave Effekt:</span><span id="val-p2-pwr" class="val" style="color:var(--green);">0.00 kW</span></div>
         <div class="metric-sub"><span class="lbl">Estimeret Energi:</span><span id="val-energy" class="val">--.- kWh</span></div>
         <div class="metric-sub"><span class="lbl">Sikkerhedskontakter:</span><span id="val-switches" class="val" style="color:var(--green);">LAD / AFLAD OK</span></div>
       </div>
@@ -160,10 +167,10 @@ footer { text-align: center; font-size: 0.8rem; color: var(--text-muted); margin
 
   <!-- Cells Diagnostic Section (32 Cells) -->
   <div class="grid-2">
-    <!-- Rosen Pack 1 (16 cells) -->
+    <!-- Pack 1 (16 cells) -->
     <div class="card">
       <div class="card-header">
-        <span>Batteri 1: Rosen Master (200Ah &bull; 16 Celler)</span>
+        <span id="lbl-p1-title">Batteri 1: Master (16 Celler)</span>
         <span id="p1-delta-lbl" style="color:#fff; font-size:0.75rem;">Min: -.---V | Max: -.---V</span>
       </div>
       <div class="card-body">
@@ -171,10 +178,10 @@ footer { text-align: center; font-size: 0.8rem; color: var(--text-muted); margin
       </div>
     </div>
 
-    <!-- RPT Tower Pack 2 (16 cells) -->
+    <!-- Pack 2 (16 cells) -->
     <div class="card">
       <div class="card-header">
-        <span>Batteri 2: RPT Tower Slave (300Ah &bull; 16 Celler)</span>
+        <span id="lbl-p2-title">Batteri 2: Slave (16 Celler)</span>
         <span id="p2-delta-lbl" style="color:#fff; font-size:0.75rem;">Min: -.---V | Max: -.---V</span>
       </div>
       <div class="card-body">
@@ -198,7 +205,7 @@ footer { text-align: center; font-size: 0.8rem; color: var(--text-muted); margin
   </div>
 
   <footer>
-    RPT & Rosen Batterimonitor v1.5.2 &bull; ESP32-S3 (Rev 1.2) &bull; Deye CAN 500k &bull; Live opdatering aktiv
+    RPT & Rosen Batterimonitor v1.5.5 (2026-09-06 17:50:00) &bull; ESP32-S3 (Rev 1.2) &bull; Deye CAN 500k &bull; Live opdatering aktiv
   </footer>
 </div>
 
@@ -282,6 +289,19 @@ async function updateData() {
     } else {
       document.getElementById('lipo-val').textContent = 'N/A';
       lipoBadge.className = 'badge badge-cyan';
+    }
+
+    if (d.pack1 && d.pack1.name) {
+      const p1T = document.getElementById('lbl-p1-title'); if (p1T) p1T.textContent = 'Batteri 1: ' + d.pack1.name + ' (16 Celler)';
+      const p1S = document.getElementById('lbl-p1-soc'); if (p1S) p1S.textContent = d.pack1.name + ':';
+      const p1C = document.getElementById('lbl-p1-curr'); if (p1C) p1C.textContent = d.pack1.name + ' Strøm:';
+      const p1P = document.getElementById('lbl-p1-pwr'); if (p1P) p1P.textContent = d.pack1.name + ' Effekt:';
+    }
+    if (d.pack2 && d.pack2.name) {
+      const p2T = document.getElementById('lbl-p2-title'); if (p2T) p2T.textContent = 'Batteri 2: ' + d.pack2.name + ' (16 Celler)';
+      const p2S = document.getElementById('lbl-p2-soc'); if (p2S) p2S.textContent = d.pack2.name + ':';
+      const p2C = document.getElementById('lbl-p2-curr'); if (p2C) p2C.textContent = d.pack2.name + ' Strøm:';
+      const p2P = document.getElementById('lbl-p2-pwr'); if (p2P) p2P.textContent = d.pack2.name + ' Effekt:';
     }
 
     // Card 0: SOC
@@ -413,8 +433,6 @@ void BatteryWebServer::begin() {
             WiFi.setTxPower(WIFI_POWER_8_5dBm);
             LOG_PRINTF("[WIFI] STA IP assigned: %s (RSSI: %d dBm)\n",
                        WiFi.localIP().toString().c_str(), WiFi.RSSI());
-            // Resynchronize RGB GDMA scanout immediately after connection burst
-            UIManager::getInstance().resyncDisplay();
         } else if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
             WiFi.setSleep(false);
             WiFi.setTxPower(WIFI_POWER_8_5dBm);
@@ -558,9 +576,12 @@ void BatteryWebServer::handleApiData() {
     json += "\"lipo_percent\":" + String(bData.lipo_soc_percent) + ",";
     json += "\"lipo_connected\":" + String(bData.lipo_connected ? "true" : "false") + ",";
 
-    // Pack 1 (Rosen 200Ah)
+    // Pack 1 (Master)
+    const char* mName = SystemConfig::getInstance().getMasterBrandName();
+    const char* sName = SystemConfig::getInstance().getSlaveBrandName();
+
     json += "\"pack1\":{";
-    json += "\"name\":\"Rosen Master\",";
+    json += "\"name\":\"" + String(mName) + " Master\",";
     json += "\"soc\":" + String(bData.pack1_soc_percent) + ",";
     json += "\"current\":" + String(bData.pack1_current_A, 1) + ",";
     json += "\"power\":" + String(bData.pack1_power_W, 1) + ",";
@@ -574,9 +595,9 @@ void BatteryWebServer::handleApiData() {
     }
     json += "]},";
 
-    // Pack 2 (RPT 300Ah)
+    // Pack 2 (Slave)
     json += "\"pack2\":{";
-    json += "\"name\":\"RPT Tower\",";
+    json += "\"name\":\"" + String(sName) + " Slave\",";
     json += "\"soc\":" + String(bData.pack2_soc_percent) + ",";
     json += "\"current\":" + String(bData.pack2_current_A, 1) + ",";
     json += "\"power\":" + String(bData.pack2_power_W, 1) + ",";

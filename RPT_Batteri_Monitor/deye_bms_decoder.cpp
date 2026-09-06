@@ -1,3 +1,9 @@
+// =============================================================================
+// PROJEKT : RPT-Batterimonitor med Waveshare ESP32-S3-Touch-LCD-7 (Rev 1.2)
+// MODUL   : deye_bms_decoder.cpp
+// DATO/TID: 2026-09-06 19:32:00
+// =============================================================================
+
 #include "deye_bms_decoder.h"
 
 DeyeBmsDecoder& DeyeBmsDecoder::getInstance() {
@@ -24,73 +30,56 @@ void DeyeBmsDecoder::begin() {
         memset(&_data, 0, sizeof(_data));
         _pack2_soc_direct = false;
         _data.communicationOK = false;
+        _data.pack1_online = false;
+        _data.pack2_online = false;
+        _data.pack1_cells_valid = false;
+        _data.pack2_cells_valid = false;
+        _data.individualCellsKnown = false;
         _data.lastUpdate_ms = 0;
         _data.pack1_capacity_Ah = 200.0f;
-        _data.pack2_capacity_Ah = 301.0f;
+        _data.pack2_capacity_Ah = 0.0f;
         xSemaphoreGive(_mutex);
     }
 }
 
+#include "system_config.h"
+
 void DeyeBmsDecoder::updatePackTelemetry() {
-    // Both battery packs are connected in parallel to the common DC busbar.
-    // Pack 1: Rosen Powerwall LiFePO4 51.2V 200Ah (~10.24 kWh)
-    // Pack 2: RPT Tower LiFePO4 51.2V 300Ah (~15.36 kWh)
-    // Combined nominal capacity: 501 Ah (~25.6 kWh)
-    float totalCap = (_data.totalCapacity_Ah > 0) ? (float)_data.totalCapacity_Ah : 501.0f;
-    float p1Cap = 200.0f;
-    float p2Cap = (totalCap > p1Cap) ? (totalCap - p1Cap) : 301.0f;
-    float sumCap = p1Cap + p2Cap;
-    float ratio1 = (sumCap > 0.0f) ? (p1Cap / sumCap) : 0.3992f;
-    float ratio2 = (sumCap > 0.0f) ? (p2Cap / sumCap) : 0.6008f;
+    // Zero-tolerance for estimated/fake data:
+    // CAN communication is directly with Pack 1 (Configured Master).
+    // All measured values from CAN bus belong to Pack 1 / Master bank.
+    BatteryBrand mBrand = SystemConfig::getInstance().getMaster();
+    BatteryBrand sBrand = SystemConfig::getInstance().getSlave();
+    float mCap = SystemConfig::getInstance().getBrandNominalCap(mBrand);
+    float sCap = SystemConfig::getInstance().getBrandNominalCap(sBrand);
 
-    _data.pack1_capacity_Ah = p1Cap;
-    _data.pack2_capacity_Ah = p2Cap;
+    _data.pack1_online = _data.communicationOK;
+    _data.pack1_capacity_Ah = (_data.totalCapacity_Ah > 0) ? (float)_data.totalCapacity_Ah : mCap;
+    _data.pack1_soc_percent = _data.soc_percent;
+    _data.pack1_current_A = _data.current_A;
+    _data.pack1_power_W = _data.power_W;
+    _data.pack1_chargeLimit_A = _data.chargeCurrentLimit_A;
+    _data.pack1_dischargeLimit_A = _data.dischargeCurrentLimit_A;
+    _data.pack1_minV = _data.minCellVoltage_V;
+    _data.pack1_maxV = _data.maxCellVoltage_V;
 
-    // Parallel LiFePO4 current splits proportional to capacity / inverse to internal resistance (I ~ C)
-    _data.pack1_current_A = _data.current_A * ratio1;
-    _data.pack2_current_A = _data.current_A * ratio2;
+    float socFrac1 = (_data.pack1_soc_percent > 0) ? (_data.pack1_soc_percent / 100.0f) : 0.0f;
+    _data.pack1_energy_kwh = (_data.pack1_capacity_Ah * 51.2f * socFrac1) / 1000.0f;
 
-    _data.pack1_power_W = _data.voltage_V * _data.pack1_current_A;
-    _data.pack2_power_W = _data.voltage_V * _data.pack2_current_A;
-
-    _data.pack1_chargeLimit_A = _data.chargeCurrentLimit_A * ratio1;
-    _data.pack2_chargeLimit_A = _data.chargeCurrentLimit_A * ratio2;
-
-    _data.pack1_dischargeLimit_A = _data.dischargeCurrentLimit_A * ratio1;
-    _data.pack2_dischargeLimit_A = _data.dischargeCurrentLimit_A * ratio2;
-
-    // Evaluate individual pack SOC
-    if (!_pack2_soc_direct && _data.soc_percent > 0) {
-        // Derive relative SOC variation from cell voltage difference between Pack 1 and Pack 2
-        float v1 = (_data.pack1_minV > 2.0f && _data.pack1_maxV > 2.0f) ? 
-                   ((_data.pack1_minV + _data.pack1_maxV) * 0.5f) : 3.372f;
-        float v2 = (_data.pack2_minV > 2.0f && _data.pack2_maxV > 2.0f) ? 
-                   ((_data.pack2_minV + _data.pack2_maxV) * 0.5f) : 3.375f;
-        
-        // In LiFePO4 3.25V-3.40V plateau, ~2mV delta corresponds to ~1% SOC difference
-        float deltaSoc = (v2 - v1) * 500.0f;
-        if (deltaSoc > 8.0f) deltaSoc = 8.0f;
-        if (deltaSoc < -8.0f) deltaSoc = -8.0f;
-
-        float baseSoc = (float)_data.soc_percent;
-        float soc1 = baseSoc - (ratio2 * deltaSoc);
-        float soc2 = baseSoc + (ratio1 * deltaSoc);
-
-        if (soc1 < 1.0f) soc1 = 1.0f;
-        if (soc1 > 100.0f) soc1 = 100.0f;
-        if (soc2 < 1.0f) soc2 = 1.0f;
-        if (soc2 > 100.0f) soc2 = 100.0f;
-
-        _data.pack1_soc_percent = (uint16_t)(soc1 + 0.5f);
-        _data.pack2_soc_percent = (uint16_t)(soc2 + 0.5f);
-    } else if (_data.soc_percent > 0 && _data.pack1_soc_percent == 0) {
-        _data.pack1_soc_percent = _data.soc_percent;
-    }
-
-    float socFrac1 = (_data.pack1_soc_percent > 0) ? (_data.pack1_soc_percent / 100.0f) : ((_data.soc_percent > 0) ? (_data.soc_percent / 100.0f) : 0.0f);
-    float socFrac2 = (_data.pack2_soc_percent > 0) ? (_data.pack2_soc_percent / 100.0f) : ((_data.soc_percent > 0) ? (_data.soc_percent / 100.0f) : 0.0f);
-    _data.pack1_energy_kwh = (p1Cap * 51.2f * socFrac1) / 1000.0f;
-    _data.pack2_energy_kwh = (p2Cap * 51.2f * socFrac2) / 1000.0f;
+    // Pack 2 (Configured Slave):
+    // No physical data stream received directly on CAN bus yet.
+    // Explicitly set to OFFLINE / UNCONNECTED until dedicated telemetry is received.
+    _data.pack2_online = false;
+    _data.pack2_cells_valid = false;
+    _data.pack2_soc_percent = 0;
+    _data.pack2_capacity_Ah = sCap;
+    _data.pack2_current_A = 0.0f;
+    _data.pack2_power_W = 0.0f;
+    _data.pack2_energy_kwh = 0.0f;
+    _data.pack2_chargeLimit_A = 0.0f;
+    _data.pack2_dischargeLimit_A = 0.0f;
+    _data.pack2_minV = 0.0f;
+    _data.pack2_maxV = 0.0f;
 }
 
 bool DeyeBmsDecoder::decodeFrame(const CanFrameRaw& frame) {
@@ -195,6 +184,8 @@ bool DeyeBmsDecoder::decodeFrame(const CanFrameRaw& frame) {
                 _data.minCellVoltage_V = ((uint16_t)frame.data[1] << 8 | frame.data[0]) * 0.001f;
                 _data.maxCellVoltage_V = ((uint16_t)frame.data[3] << 8 | frame.data[2]) * 0.001f;
                 _data.cellDelta_mV     = (_data.maxCellVoltage_V - _data.minCellVoltage_V) * 1000.0f;
+                _data.pack1_minV       = _data.minCellVoltage_V;
+                _data.pack1_maxV       = _data.maxCellVoltage_V;
                 if (frame.dlc >= 8) {
                     uint16_t tMinK = ((uint16_t)frame.data[5] << 8 | frame.data[4]);
                     uint16_t tMaxK = ((uint16_t)frame.data[7] << 8 | frame.data[6]);
@@ -202,43 +193,11 @@ bool DeyeBmsDecoder::decodeFrame(const CanFrameRaw& frame) {
                     if (tMaxK > 200 && tMaxK < 400) _data.maxCellTemp_C = tMaxK - 273.15f;
                 }
 
-                // Update Pack 1 (Rosen Master) and Pack 2 (RPT Slave) 16-cell arrays
-                if (!_data.individualCellsKnown && _data.minCellVoltage_V > 2.0f && _data.maxCellVoltage_V > 2.0f) {
-                    float avg = (_data.voltage_V > 10.0f) ? (_data.voltage_V / 16.0f) : ((_data.minCellVoltage_V + _data.maxCellVoltage_V) * 0.5f);
-                    float dV = _data.maxCellVoltage_V - _data.minCellVoltage_V;
-                    static const float offsets1[16] = {
-                        -0.50f, 0.18f, -0.15f, 0.35f, -0.22f, 0.42f, -0.08f, 0.48f,
-                        0.12f, -0.38f, 0.28f, -0.28f, 0.32f, -0.18f, 0.15f, -0.05f
-                    };
-                    static const float offsets2[16] = {
-                        0.25f, -0.12f, 0.38f, -0.42f, 0.15f, -0.28f, 0.50f, -0.08f,
-                        -0.35f, 0.22f, -0.18f, 0.45f, -0.25f, 0.18f, -0.15f, 0.10f
-                    };
-
-                    for (int c = 0; c < 16; c++) {
-                        float v1 = avg + (offsets1[c] * dV);
-                        if (v1 < _data.minCellVoltage_V) v1 = _data.minCellVoltage_V;
-                        if (v1 > _data.maxCellVoltage_V) v1 = _data.maxCellVoltage_V;
-                        _data.pack1_cellVoltages[c] = v1;
-
-                        float v2 = avg + (offsets2[c] * dV);
-                        if (v2 < _data.minCellVoltage_V) v2 = _data.minCellVoltage_V;
-                        if (v2 > _data.maxCellVoltage_V) v2 = _data.maxCellVoltage_V;
-                        _data.pack2_cellVoltages[c] = v2;
-
-                        _data.cellVoltages[c] = v1;
-                    }
-                    _data.pack1_cellVoltages[0] = _data.minCellVoltage_V;
-                    _data.pack2_cellVoltages[6] = _data.maxCellVoltage_V;
-                    _data.pack1_minV = _data.minCellVoltage_V;
-                    _data.pack1_maxV = _data.maxCellVoltage_V > 0.002f ? (_data.maxCellVoltage_V - 0.002f) : _data.maxCellVoltage_V;
-                    _data.pack2_minV = _data.minCellVoltage_V + 0.002f;
-                    _data.pack2_maxV = _data.maxCellVoltage_V;
-                }
-
+                // Zero fake data: No synthetic offsets generated!
                 recognized = true;
                 _data.lastUpdate_ms = frame.timestamp_ms;
                 _data.communicationOK = true;
+                _data.pack1_online = true;
             }
             break;
 
@@ -257,13 +216,17 @@ bool DeyeBmsDecoder::decodeFrame(const CanFrameRaw& frame) {
                 for (int i = 0; i < 4; i++) {
                     uint16_t rawMv = ((uint16_t)frame.data[i * 2 + 1] << 8 | frame.data[i * 2]);
                     if (rawMv > 2000 && rawMv < 4500) {
-                        _data.cellVoltages[baseCell + i] = rawMv * 0.001f;
+                        float vCell = rawMv * 0.001f;
+                        _data.cellVoltages[baseCell + i] = vCell;
+                        _data.pack1_cellVoltages[baseCell + i] = vCell;
                         _data.individualCellsKnown = true;
+                        _data.pack1_cells_valid = true;
                     }
                 }
                 recognized = true;
                 _data.lastUpdate_ms = frame.timestamp_ms;
                 _data.communicationOK = true;
+                _data.pack1_online = true;
             }
             break;
 
@@ -303,12 +266,22 @@ bool DeyeBmsDecoder::getBatteryData(BatteryData& out_data) {
     return out_data.communicationOK;
 }
 
+void DeyeBmsDecoder::setBatteryData(const BatteryData& in_data) {
+    if (_mutex && xSemaphoreTake(_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        memcpy(&_data, &in_data, sizeof(BatteryData));
+        _data.lastUpdate_ms = millis();
+        xSemaphoreGive(_mutex);
+    }
+}
+
 void DeyeBmsDecoder::checkWatchdog(uint32_t timeout_ms) {
     uint32_t now = millis();
     if (_mutex && xSemaphoreTake(_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         if (_data.communicationOK && (now - _data.lastUpdate_ms > timeout_ms)) {
             _data.communicationOK = false;
+            _data.pack1_online = false;
         }
         xSemaphoreGive(_mutex);
     }
 }
+

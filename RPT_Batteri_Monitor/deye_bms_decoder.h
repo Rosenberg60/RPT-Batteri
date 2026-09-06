@@ -1,3 +1,9 @@
+// =============================================================================
+// PROJEKT : RPT-Batterimonitor med Waveshare ESP32-S3-Touch-LCD-7 (Rev 1.2)
+// MODUL   : deye_bms_decoder.h
+// DATO/TID: 2026-09-06 19:32:00
+// =============================================================================
+
 #pragma once
 
 #include <Arduino.h>
@@ -24,6 +30,9 @@ public:
 
     // Get thread-safe snapshot of decoded battery data
     bool getBatteryData(BatteryData& out_data);
+
+    // Update battery data directly (used by RS485 poller)
+    void setBatteryData(const BatteryData& in_data);
 
     // Reset / mark communication lost if no telegram received in timeout_ms
     void checkWatchdog(uint32_t timeout_ms = 5000);

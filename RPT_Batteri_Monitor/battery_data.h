@@ -1,5 +1,11 @@
 #pragma once
 
+// =============================================================================
+// PROJEKT : RPT-Batterimonitor med Waveshare ESP32-S3-Touch-LCD-7 (Rev 1.2)
+// MODUL   : battery_data.h (Bank Telemetry & 32-Cell Data Models)
+// DATO/TID: 2026-09-06 19:32:00
+// =============================================================================
+
 #include <Arduino.h>
 
 /**
@@ -76,6 +82,10 @@ struct BatteryData {
     float pack2_minV;
     float pack2_maxV;
     bool  individualCellsKnown;
+    bool  pack1_online;
+    bool  pack2_online;
+    bool  pack1_cells_valid;
+    bool  pack2_cells_valid;
 
     // Dual Pack Telemetry (Pack 1: Rosen 200Ah Master, Pack 2: RPT 300Ah Slave)
     uint16_t pack1_soc_percent;
@@ -94,6 +104,8 @@ struct BatteryData {
     float pack2_dischargeLimit_A;
 
     char manufacturer[16];
+    char pack1_name[16];
+    char pack2_name[16];
 
     bool chargeAllowed;
     bool dischargeAllowed;
@@ -105,6 +117,19 @@ struct BatteryData {
     float    lipo_voltage_V;
     uint8_t  lipo_soc_percent;
     bool     lipo_connected;
+
+    // RS485 Multidrop & Deye Gateway Diagnostics
+    bool     rs485_online;
+    uint32_t rs485_baud;
+    uint32_t rs485_tx_queries;
+    uint32_t rs485_rx_raw_bytes;
+    uint32_t rs485_rx_count;
+    uint32_t rs485_err_count;
+    char     rs485_last_tx[40];
+    char     rs485_last_rx_hex[48];
+    char     rs485_proto_name[24];
+    bool     deye_gateway_active;
+    uint32_t deye_tx_count;
 
     uint32_t lastUpdate_ms;
 };

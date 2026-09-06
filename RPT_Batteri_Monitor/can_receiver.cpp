@@ -1,3 +1,9 @@
+// =============================================================================
+// PROJEKT : RPT-Batterimonitor med Waveshare ESP32-S3-Touch-LCD-7 (Rev 1.2)
+// MODUL   : can_receiver.cpp (TWAI CAN Receiver & Gateway Transmitter Implementation)
+// DATO/TID: 2026-09-06 19:32:00
+// =============================================================================
+
 #include "can_receiver.h"
 #include "driver/twai.h"
 #include "esp_log.h"
@@ -291,4 +297,18 @@ size_t CanReceiver::getRecentFrames(CanFrameRaw* out_array, size_t max_count) {
         xSemaphoreGive(_mutex);
     }
     return copied;
+}
+
+bool CanReceiver::transmitFrame(uint32_t id, const uint8_t* data, uint8_t dlc, bool extended) {
+    if (!_driver_installed) return false;
+    twai_message_t tx_msg = {};
+    tx_msg.identifier = id;
+    tx_msg.extd = extended ? 1 : 0;
+    tx_msg.rtr = 0;
+    tx_msg.data_length_code = dlc > 8 ? 8 : dlc;
+    if (data && tx_msg.data_length_code > 0) {
+        memcpy(tx_msg.data, data, tx_msg.data_length_code);
+    }
+    esp_err_t err = twai_transmit(&tx_msg, pdMS_TO_TICKS(15));
+    return (err == ESP_OK);
 }

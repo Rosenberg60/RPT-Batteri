@@ -2,8 +2,8 @@
 
 // =============================================================================
 // PROJEKT : RPT-Batterimonitor med Waveshare ESP32-S3-Touch-LCD-7 (Rev 1.2)
-// VERSION : v1.5.2 (Restored Page 1 IP Display, Full Redraw Cache Invalidation)
-// DATO/TID: 2026-09-06 11:45:00
+// VERSION : v1.6.4 (ST7262 Centered Porches, Pylontech RS485 Protocol Fixed)
+// DATO/TID: 2026-09-06 20:05:00
 // =============================================================================
 
 #include <Arduino.h>
@@ -71,10 +71,11 @@
 #define BOARD_TOUCH_I2C_ADDR        0x5D        // Default address (or 0x14)
 
 // -----------------------------------------------------------------------------
-// RS485 Interface
+// RS485 Interface (U6: SP3485EN Transceiver & S1 Auto-Direction Transistor)
+// Hardware: U6 Pin 1 (RO) -> GPIO 15 (RX) | S1 Base -> GPIO 16 (TX)
 // -----------------------------------------------------------------------------
-#define BOARD_RS485_TX_PIN          GPIO_NUM_15
-#define BOARD_RS485_RX_PIN          GPIO_NUM_16
+#define BOARD_RS485_TX_PIN          GPIO_NUM_16
+#define BOARD_RS485_RX_PIN          GPIO_NUM_15
 
 // -----------------------------------------------------------------------------
 // ESP32-S3 LiPo Battery Voltage Sensing (Option A: TP1 to Sensor AD / GPIO 6)
@@ -136,11 +137,11 @@
 #define LOG_PRINTF(...)   do { Serial.printf(__VA_ARGS__);  } while(0)
 #endif
 
-// Timing parameters for Waveshare 7.0" 800x480 RGB Panel (ST7262) - Proven Waveshare Specification
-#define LCD_TIMING_HPW              4
-#define LCD_TIMING_HBP              8
+// Timing parameters for Waveshare 7.0" 800x480 RGB Panel (ST7262) - Centered Databook Specification
+#define LCD_TIMING_HPW              10
+#define LCD_TIMING_HBP              43
 #define LCD_TIMING_HFP              8
-#define LCD_TIMING_VPW              4
-#define LCD_TIMING_VBP              8
+#define LCD_TIMING_VPW              8
+#define LCD_TIMING_VBP              12
 #define LCD_TIMING_VFP              8
 

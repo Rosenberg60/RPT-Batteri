@@ -1,8 +1,16 @@
+// =============================================================================
+// PROJEKT : RPT-Batterimonitor med Waveshare ESP32-S3-Touch-LCD-7 (Rev 1.2)
+// MODUL   : ui.cpp (UI & Graphics Engine - Dual Pack 32-Cell Tabs & Dashboard)
+// DATO/TID: 2026-09-06 20:05:00
+// =============================================================================
+
 #include "ui.h"
 #include "can_receiver.h"
 #include "sd_logger.h"
 #include "deye_bms_decoder.h"
 #include "web_server.h"
+#include "system_config.h"
+#include "rs485_battery_manager.h"
 #include <Wire.h>
 #include "esp_lcd_panel_rgb.h"
 #include "esp_lcd_panel_ops.h"
@@ -134,6 +142,7 @@ static const uint8_t font5x7[] PROGMEM = {
 
 // VSYNC tracking & IRAM-safe ISR callback to prevent crashes during Flash/WiFi ops
 static volatile bool s_vsync_occurred = false;
+static bool s_diag_needs_full_redraw = true;
 
 #if defined(ESP_IDF_VERSION) && (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0))
 IRAM_ATTR static bool rgb_lcd_on_vsync_event(esp_lcd_panel_handle_t panel, const esp_lcd_rgb_panel_event_data_t *edata, void *user_ctx) {
@@ -158,6 +167,7 @@ UIManager::UIManager()
       _ch422g_out_mask(0),
       _view_mode(UI_VIEW_DASHBOARD),
       _last_drawn_mode((UIViewMode)255),
+      _cell_view_pack(0),
       _last_touch_ms(0),
       _initialized(false),
       _is_direct_fb(false)
@@ -361,14 +371,6 @@ bool UIManager::begin() {
     return true;
 }
 
-void UIManager::resyncDisplay() {
-#if defined(ESP_IDF_VERSION) && (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0))
-    if (_panel_handle) {
-        esp_lcd_rgb_panel_restart(_panel_handle);
-    }
-#endif
-}
-
 void UIManager::uiTaskTrampoline(void* arg) {
     reinterpret_cast<UIManager*>(arg)->uiTask();
 }
@@ -376,21 +378,13 @@ void UIManager::uiTaskTrampoline(void* arg) {
 void UIManager::uiTask() {
     LOG_PRINTLN("[UI] Task running on Core 1.");
     uint32_t last_render_ms = 0;
-    uint32_t last_resync_ms = 0;
     UIViewMode last_mode = _view_mode;
     while (_initialized) {
         checkTouch();
         uint32_t now = millis();
         // Redraw at 2.5 Hz (every 400ms) or immediately if page changed
         if (now - last_render_ms >= 400 || _view_mode != last_mode) {
-            // Periodic GDMA resync (every 4 seconds or on page switch) resets GDMA descriptor
-            // start pointers to line 0 at the next VSYNC boundary, permanently preventing vertical screen drift
-            if (_view_mode != last_mode || (now - last_resync_ms >= 4000)) {
-                resyncDisplay();
-                last_resync_ms = now;
-            }
-
-            // Wait for VSYNC frame boundary before rendering
+            // Wait for VSYNC frame boundary before rendering to prevent tearing
             s_vsync_occurred = false;
             uint32_t vsync_wait_start = millis();
             while (!s_vsync_occurred && (millis() - vsync_wait_start < 40)) {
@@ -630,20 +624,57 @@ void UIManager::checkTouch() {
                 uint16_t touchY = ((uint16_t)yHigh << 8) | yLow;
 
                 if (points > 0) {
-                    // Only active within bottom navigation bar tabs (Y: 420 to 480)
+                    // 1. Only active within bottom navigation bar tabs (Y: 420 to 480)
                     if (touchY >= 420 && touchY <= 480) {
-                        if (touchX >= 5 && touchX <= 265) {
+                        if (touchX >= 5 && touchX < 200) {
                             setPage(0); // Button 1: Dashboard
                             _last_touch_ms = now;
-                        } else if (touchX >= 270 && touchX <= 530) {
+                        } else if (touchX >= 200 && touchX < 400) {
                             setPage(1); // Button 2: Cell Diagnostics (32S)
                             _last_touch_ms = now;
-                        } else if (touchX >= 535 && touchX <= 795) {
+                        } else if (touchX >= 400 && touchX < 600) {
                             setPage(2); // Button 3: CAN Scanner
+                            _last_touch_ms = now;
+                        } else if (touchX >= 600 && touchX <= 795) {
+                            setPage(3); // Button 4: Konfiguration
                             _last_touch_ms = now;
                         }
                     }
-                    // Outside the 3 buttons: completely ignored
+                    // 2. Interactive Touch for Page 4: RS485 Monitor & Configuration
+                    else if (_view_mode == UI_VIEW_CONFIG) {
+                        // Action buttons inside Box 4 (Y: 250 to 295)
+                        if (touchY >= 250 && touchY <= 295) {
+                            // Button 1: [ SKIFT BAUD ] (X: 414 to 590)
+                            if (touchX >= 414 && touchX <= 590) {
+                                Rs485BatteryManager::getInstance().cycleBaudrate();
+                                _last_drawn_mode = (UIViewMode)255; // Redraw static page with new baud
+                                _last_touch_ms = now;
+                            }
+                            // Button 2: [ TEST POLL NU ] (X: 606 to 782)
+                            else if (touchX >= 606 && touchX <= 782) {
+                                Rs485BatteryManager::getInstance().triggerImmediatePoll();
+                                _last_touch_ms = now;
+                            }
+                        }
+                    }
+                    // 3. Interactive Touch for Page 2: Cell Diagnostics Pack Selector
+                    else if (_view_mode == UI_VIEW_CELL_DIAGNOSTICS) {
+                        if (touchY >= 100 && touchY <= 140) {
+                            if (touchX >= 8 && touchX <= 215) {
+                                if (_cell_view_pack != 0) {
+                                    _cell_view_pack = 0;
+                                    s_diag_needs_full_redraw = true;
+                                    _last_touch_ms = now;
+                                }
+                            } else if (touchX >= 220 && touchX <= 430) {
+                                if (_cell_view_pack != 1) {
+                                    _cell_view_pack = 1;
+                                    s_diag_needs_full_redraw = true;
+                                    _last_touch_ms = now;
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // Clear buffer status flag
@@ -763,22 +794,31 @@ void UIManager::drawStaticDashboard() {
         drawString(p2X + 10, midY + 134, "Protokol: Deye / Pylon 500k (P2P-ACK Aktiv)", COLOR_MID_GRAY, COLOR_CARD_BG, 1);
     } else {
         // Left Panel Static Elements (when offline)
-        drawString(p1X + 15, midY + 28, "WAITING FOR BMS TELEMETRY...", COLOR_YELLOW, COLOR_CARD_BG, 1);
-        drawString(p1X + 15, midY + 46, "* Check CAN cabling: Pin 4=CAN-H, Pin 5=CAN-L", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-        drawString(p1X + 15, midY + 62, "* Inverter baud rate: 500 kbit/s (standard)", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-        drawString(p1X + 15, midY + 78, "* Jumper 13: ON (120 Ohm Point-to-Point)", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-        drawString(p1X + 15, midY + 94, "* Rosen Master: DIP 1000 skal være tændt", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        drawString(p1X + 15, midY + 28, "WAITING FOR BATTERY TELEMETRY (RS485)...", COLOR_YELLOW, COLOR_CARD_BG, 1);
+        drawString(p1X + 15, midY + 46, "* RS485 Kabling : Stik J7 (A=Pin 1, B=Pin 2)", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        drawString(p1X + 15, midY + 62, "* Multidrop Bus : RPT ID=1, Rosen ID=2", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        drawString(p1X + 15, midY + 78, "* RS485 Baud    : 9600 bps (eller 115200)", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        drawString(p1X + 15, midY + 94, "* CAN Gateway   : Sender 500k data til Deye Inverter", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
         drawString(p1X + 15, midY + 114, "Når batteri sender, vises celledata straks.", COLOR_CYAN, COLOR_CARD_BG, 1);
-        drawString(p1X + 15, midY + 132, "Se fane [3. CAN SCANNER] for rå CAN rammer.", COLOR_MID_GRAY, COLOR_CARD_BG, 1);
+        drawString(p1X + 15, midY + 132, "Se fane [4. RS485 / GW] for Live Bus Monitor.", COLOR_MID_GRAY, COLOR_CARD_BG, 1);
 
         // Right Panel Static Elements (when offline)
+        const char* mN = SystemConfig::getInstance().getMasterBrandName();
+        const char* sN = SystemConfig::getInstance().getSlaveBrandName();
+        float mC = SystemConfig::getInstance().getBrandNominalCap(SystemConfig::getInstance().getMaster());
+        float sC = SystemConfig::getInstance().getBrandNominalCap(SystemConfig::getInstance().getSlave());
+        char bufLine[64];
+
         drawString(p2X + 15, midY + 28, "STANDBY KONFIGURATION", COLOR_YELLOW, COLOR_CARD_BG, 1);
-        drawString(p2X + 15, midY + 46, "Total Bank Kapacitet : 501 Ah (25.6 kWh)", COLOR_WHITE, COLOR_CARD_BG, 1);
-        drawString(p2X + 15, midY + 62, "Master Batteri       : Rosen 200Ah (DIP 1000)", COLOR_WHITE, COLOR_CARD_BG, 1);
-        drawString(p2X + 15, midY + 78, "Slave Batteri        : RPT 300Ah   (DIP 0100)", COLOR_WHITE, COLOR_CARD_BG, 1);
+        snprintf(bufLine, sizeof(bufLine), "Total Bank Kapacitet : %.0f Ah (%.1f kWh)", mC + sC, (mC + sC) * 51.2f / 1000.0f);
+        drawString(p2X + 15, midY + 46, bufLine, COLOR_WHITE, COLOR_CARD_BG, 1);
+        snprintf(bufLine, sizeof(bufLine), "Master Batteri       : %s %.0fAh", mN, mC);
+        drawString(p2X + 15, midY + 62, bufLine, COLOR_WHITE, COLOR_CARD_BG, 1);
+        snprintf(bufLine, sizeof(bufLine), "Slave Batteri        : %s %.0fAh", sN, sC);
+        drawString(p2X + 15, midY + 78, bufLine, COLOR_WHITE, COLOR_CARD_BG, 1);
         drawString(p2X + 15, midY + 94, "Maks Ladestrøm       : 390 A (Deye Inverter)", COLOR_CYAN, COLOR_CARD_BG, 1);
-        drawString(p2X + 15, midY + 114, "Forventet Fordeling  : 40% Rosen / 60% RPT", COLOR_YELLOW, COLOR_CARD_BG, 1);
-        drawString(p2X + 15, midY + 132, "Status               : Afventer CAN telemetri...", COLOR_ORANGE, COLOR_CARD_BG, 1);
+        drawString(p2X + 15, midY + 114, "Konfiguration        : Se fane [4. RS485 / GW]", COLOR_CYAN, COLOR_CARD_BG, 1);
+        drawString(p2X + 15, midY + 132, "Status               : Poller RS485 telemetri...", COLOR_ORANGE, COLOR_CARD_BG, 1);
     }
 
     // 4. Bottom Navigation Bar (Tab 0 active)
@@ -984,6 +1024,10 @@ void UIManager::updateDynamicDashboard(const BatteryData& bData, const ScannerOv
         drawTextRow(470, 24, 75, rxBuf, COLOR_LIGHT_GRAY, COLOR_NAVY, 1);
     }
 
+    // Dynamic names from persistent configuration
+    const char* mName = SystemConfig::getInstance().getBrandName(SystemConfig::getInstance().getMaster());
+    const char* sName = SystemConfig::getInstance().getBrandName(SystemConfig::getInstance().getSlave());
+
     // Header Right Badge: BMS Online / Modules
     int cur_badge_state = bData.communicationOK ? (bData.moduleCount >= 2 ? 2 : 1) : 0;
     if (cur_badge_state != s_last_badge_state) {
@@ -991,10 +1035,10 @@ void UIManager::updateDynamicDashboard(const BatteryData& bData, const ScannerOv
         fillRect(548, 6, 242, 32, COLOR_NAVY);
         if (bData.communicationOK) {
             char packBadge[32];
-            if (bData.moduleCount >= 2) {
-                snprintf(packBadge, sizeof(packBadge), "BMS ONLINE: 501Ah (2 PACKS)");
+            if (bData.pack2_online) {
+                snprintf(packBadge, sizeof(packBadge), "BMS: 501Ah (2 PACKS)");
             } else {
-                snprintf(packBadge, sizeof(packBadge), "BMS ONLINE: (1 PACK)");
+                snprintf(packBadge, sizeof(packBadge), "BMS: %s MASTER", mName);
             }
             fillRect(550, 7, 235, 30, COLOR_DARK_GREEN);
             drawRect(550, 7, 235, 30, COLOR_GREEN);
@@ -1028,14 +1072,19 @@ void UIManager::updateDynamicDashboard(const BatteryData& bData, const ScannerOv
 
         if (bData.pack1_soc_percent != s_last_c0_p1_soc) {
             s_last_c0_p1_soc = bData.pack1_soc_percent;
-            snprintf(subBuf, sizeof(subBuf), "Rosen Master: %u %%", bData.pack1_soc_percent);
+            snprintf(subBuf, sizeof(subBuf), "%s Master: %u %%", mName, bData.pack1_soc_percent);
             drawTextRow(c0X + 10, 136, cardW - 14, subBuf, COLOR_CYAN, COLOR_CARD_BG, 1);
         }
 
-        if (bData.pack2_soc_percent != s_last_c0_p2_soc) {
-            s_last_c0_p2_soc = bData.pack2_soc_percent;
-            snprintf(subBuf, sizeof(subBuf), "RPT   Slave : %u %%", bData.pack2_soc_percent);
-            drawTextRow(c0X + 10, 154, cardW - 14, subBuf, COLOR_GREEN, COLOR_CARD_BG, 1);
+        if (bData.pack2_online) {
+            if (bData.pack2_soc_percent != s_last_c0_p2_soc) {
+                s_last_c0_p2_soc = bData.pack2_soc_percent;
+                snprintf(subBuf, sizeof(subBuf), "%s Slave : %u %%", sName, bData.pack2_soc_percent);
+                drawTextRow(c0X + 10, 154, cardW - 14, subBuf, COLOR_GREEN, COLOR_CARD_BG, 1);
+            }
+        } else {
+            snprintf(subBuf, sizeof(subBuf), "%s Slave : OFFLINE", sName);
+            drawTextRow(c0X + 10, 154, cardW - 14, subBuf, COLOR_MID_GRAY, COLOR_CARD_BG, 1);
         }
 
         if (bData.totalCapacity_Ah != s_last_c0_cap) {
@@ -1063,16 +1112,16 @@ void UIManager::updateDynamicDashboard(const BatteryData& bData, const ScannerOv
             s_last_c0_soc = 0xFE;
             drawTextRow(c0X + 14, 76, 120, "-- %", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 4);
             fillRect(c0X + 14, 112, 156, 12, COLOR_CARD_BG);
-            drawTextRow(c0X + 10, 136, cardW - 14, "Rosen: -- % (Master 200A)", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-            drawTextRow(c0X + 10, 154, cardW - 14, "RPT  : -- % (Slave 300A)", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+            drawTextRow(c0X + 10, 136, cardW - 14, "Master: -- %", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+            drawTextRow(c0X + 10, 154, cardW - 14, "Slave : -- %", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
             drawTextRow(c0X + 10, 172, cardW - 14, "Total Kapacitet: 501 Ah", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
             drawTextRow(c0X + 10, 190, cardW - 14, "Sundhed SOH    : 100%", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
             drawTextRow(c0X + 10, 208, cardW - 14, "Est. Energi    : --.- kWh", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-            drawTextRow(c0X + 10, 228, cardW - 14, "Status: Afventer CAN...", COLOR_ORANGE, COLOR_CARD_BG, 1);
+            drawTextRow(c0X + 10, 228, cardW - 14, "Status: Poller RS485...", COLOR_ORANGE, COLOR_CARD_BG, 1);
         }
     }
 
-    // --- CARD 1: STORAGE POWER - ENLARGED HERO ---
+    // --- CARD 1: STORAGE POWER - ENLARGED HERO (FONT SIZE 4) ---
     int c1X = 206;
     if (bData.communicationOK) {
         float pKw = bData.power_W / 1000.0f;
@@ -1083,52 +1132,64 @@ void UIManager::updateDynamicDashboard(const BatteryData& bData, const ScannerOv
             bool modeChanged = (curMode != s_last_c1_mode);
             s_last_c1_mode = curMode;
 
+            uint16_t pColor = COLOR_CYAN;
             if (curMode == 1) { // Charging
+                pColor = COLOR_GREEN;
                 if (pKw >= 10.0f) {
-                    snprintf(valBuf, sizeof(valBuf), "+%.1f kW", pKw);
+                    snprintf(valBuf, sizeof(valBuf), "+%.1fkW", pKw);
                 } else {
-                    snprintf(valBuf, sizeof(valBuf), "+%.2f kW", pKw);
+                    snprintf(valBuf, sizeof(valBuf), "+%.2fkW", pKw);
                 }
-                drawTextRow(c1X + 10, 76, 172, valBuf, COLOR_GREEN, COLOR_CARD_BG, 3);
                 if (modeChanged) {
                     fillRect(c1X + 12, 106, 166, 22, COLOR_DARK_GREEN);
                     drawRect(c1X + 12, 106, 166, 22, COLOR_GREEN);
                     drawString(c1X + 22, 112, "CHARGING / OPLADNING", COLOR_WHITE, COLOR_DARK_GREEN, 1);
                 }
             } else if (curMode == 2) { // Discharging
+                pColor = COLOR_ORANGE;
                 if (pKw <= -10.0f) {
-                    snprintf(valBuf, sizeof(valBuf), "%.1f kW", pKw);
+                    snprintf(valBuf, sizeof(valBuf), "%.1fkW", pKw);
                 } else {
-                    snprintf(valBuf, sizeof(valBuf), "%.2f kW", pKw);
+                    snprintf(valBuf, sizeof(valBuf), "%.2fkW", pKw);
                 }
-                drawTextRow(c1X + 10, 76, 172, valBuf, COLOR_ORANGE, COLOR_CARD_BG, 3);
                 if (modeChanged) {
                     fillRect(c1X + 12, 106, 166, 22, 0x8200);
                     drawRect(c1X + 12, 106, 166, 22, COLOR_ORANGE);
                     drawString(c1X + 22, 112, "DISCHARGING / AFLAD", COLOR_WHITE, 0x8200, 1);
                 }
             } else { // Standby
-                drawTextRow(c1X + 10, 76, 172, "0.00 kW", COLOR_CYAN, COLOR_CARD_BG, 3);
+                pColor = COLOR_CYAN;
+                snprintf(valBuf, sizeof(valBuf), "0.00kW");
                 if (modeChanged) {
                     fillRect(c1X + 12, 106, 166, 22, COLOR_DARK_GRAY);
                     drawRect(c1X + 12, 106, 166, 22, COLOR_MID_GRAY);
                     drawString(c1X + 38, 112, "STANDBY DRIFT", COLOR_WHITE, COLOR_DARK_GRAY, 1);
                 }
             }
+
+            // Large Hero Font Size 4: Clear entire number slot cleanly to eliminate artifacts
+            fillRect(c1X + 6, 74, 178, 32, COLOR_CARD_BG);
+            drawString(c1X + 10, 76, valBuf, pColor, COLOR_CARD_BG, 4);
+
             snprintf(subBuf, sizeof(subBuf), "Effekt Total: %+.2f kW", pKw);
             drawTextRow(c1X + 10, 208, cardW - 14, subBuf, COLOR_YELLOW, COLOR_CARD_BG, 1);
         }
 
         if (fabsf(bData.pack1_power_W - s_last_c1_p1_p) >= 15.0f) {
             s_last_c1_p1_p = bData.pack1_power_W;
-            snprintf(subBuf, sizeof(subBuf), "Rosen Effekt: %+.2f kW", bData.pack1_power_W / 1000.0f);
+            snprintf(subBuf, sizeof(subBuf), "%s Effekt: %+.2f kW", mName, bData.pack1_power_W / 1000.0f);
             drawTextRow(c1X + 10, 136, cardW - 14, subBuf, COLOR_CYAN, COLOR_CARD_BG, 1);
         }
 
-        if (fabsf(bData.pack2_power_W - s_last_c1_p2_p) >= 15.0f) {
-            s_last_c1_p2_p = bData.pack2_power_W;
-            snprintf(subBuf, sizeof(subBuf), "RPT   Effekt: %+.2f kW", bData.pack2_power_W / 1000.0f);
-            drawTextRow(c1X + 10, 154, cardW - 14, subBuf, COLOR_GREEN, COLOR_CARD_BG, 1);
+        if (bData.pack2_online) {
+            if (fabsf(bData.pack2_power_W - s_last_c1_p2_p) >= 15.0f) {
+                s_last_c1_p2_p = bData.pack2_power_W;
+                snprintf(subBuf, sizeof(subBuf), "%s Effekt: %+.2f kW", sName, bData.pack2_power_W / 1000.0f);
+                drawTextRow(c1X + 10, 154, cardW - 14, subBuf, COLOR_GREEN, COLOR_CARD_BG, 1);
+            }
+        } else {
+            snprintf(subBuf, sizeof(subBuf), "%s Effekt: OFFLINE", sName);
+            drawTextRow(c1X + 10, 154, cardW - 14, subBuf, COLOR_MID_GRAY, COLOR_CARD_BG, 1);
         }
 
         if (bData.chargeCurrentLimit_A != s_last_c1_chg_lim) {
@@ -1154,7 +1215,7 @@ void UIManager::updateDynamicDashboard(const BatteryData& bData, const ScannerOv
             drawTextRow(c1X + 10, 172, cardW - 14, "Maks Ladning: 390 A", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
             drawTextRow(c1X + 10, 190, cardW - 14, "Maks Aflad  : 390 A", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
             drawTextRow(c1X + 10, 208, cardW - 14, "Effekt Total: --- kW", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-            drawTextRow(c1X + 10, 228, cardW - 14, "Status: Afventer CAN...", COLOR_ORANGE, COLOR_CARD_BG, 1);
+            drawTextRow(c1X + 10, 228, cardW - 14, "Status: Poller RS485...", COLOR_ORANGE, COLOR_CARD_BG, 1);
         }
     }
 
@@ -1210,7 +1271,7 @@ void UIManager::updateDynamicDashboard(const BatteryData& bData, const ScannerOv
             drawTextRow(c2X + 10, 172, cardW - 14, "Fælles Busbar: 51.2V 16S", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
             drawTextRow(c2X + 10, 190, cardW - 14, "Celledelta dV: -- mV", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
             drawTextRow(c2X + 10, 208, cardW - 14, "Spænding Min : -.--- V", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-            drawTextRow(c2X + 10, 228, cardW - 14, "Status: Afventer CAN...", COLOR_ORANGE, COLOR_CARD_BG, 1);
+            drawTextRow(c2X + 10, 228, cardW - 14, "Status: Poller RS485...", COLOR_ORANGE, COLOR_CARD_BG, 1);
         }
     }
 
@@ -1227,12 +1288,17 @@ void UIManager::updateDynamicDashboard(const BatteryData& bData, const ScannerOv
             s_last_c3_cur = bData.current_A;
             uint16_t curColor = (bData.current_A > 0.5f) ? COLOR_GREEN :
                                 ((bData.current_A < -0.5f) ? COLOR_ORANGE : COLOR_WHITE);
-            snprintf(valBuf, sizeof(valBuf), "%+.1f A", bData.current_A);
+
+            // Always use Large Hero Font (Size 4): fits perfectly with 6-7 chars
             if (fabsf(bData.current_A) >= 100.0f) {
-                drawTextRow(c3X + 14, 78, 164, valBuf, curColor, COLOR_CARD_BG, 3);
+                snprintf(valBuf, sizeof(valBuf), "%+.0f A", bData.current_A);
             } else {
-                drawTextRow(c3X + 11, 76, 168, valBuf, curColor, COLOR_CARD_BG, 4);
+                snprintf(valBuf, sizeof(valBuf), "%+.1f A", bData.current_A);
             }
+
+            // Wipe entire number hero slot to cleanly eliminate any leftover old digits
+            fillRect(c3X + 6, 74, 180, 34, COLOR_CARD_BG);
+            drawString(c3X + 10, 76, valBuf, curColor, COLOR_CARD_BG, 4);
         }
 
         if (s_peak_chg_A != s_last_c3_peak_chg || s_peak_dchg_A != s_last_c3_peak_dchg) {
@@ -1245,14 +1311,19 @@ void UIManager::updateDynamicDashboard(const BatteryData& bData, const ScannerOv
 
         if (fabsf(bData.pack1_current_A - s_last_c3_p1_i) >= 0.15f) {
             s_last_c3_p1_i = bData.pack1_current_A;
-            snprintf(subBuf, sizeof(subBuf), "Rosen Strøm : %+.1f A", bData.pack1_current_A);
+            snprintf(subBuf, sizeof(subBuf), "%s Strøm : %+.1f A", mName, bData.pack1_current_A);
             drawTextRow(c3X + 10, 136, c3W - 14, subBuf, COLOR_CYAN, COLOR_CARD_BG, 1);
         }
 
-        if (fabsf(bData.pack2_current_A - s_last_c3_p2_i) >= 0.15f) {
-            s_last_c3_p2_i = bData.pack2_current_A;
-            snprintf(subBuf, sizeof(subBuf), "RPT   Strøm : %+.1f A", bData.pack2_current_A);
-            drawTextRow(c3X + 10, 154, c3W - 14, subBuf, COLOR_GREEN, COLOR_CARD_BG, 1);
+        if (bData.pack2_online) {
+            if (fabsf(bData.pack2_current_A - s_last_c3_p2_i) >= 0.15f) {
+                s_last_c3_p2_i = bData.pack2_current_A;
+                snprintf(subBuf, sizeof(subBuf), "%s Strøm : %+.1f A", sName, bData.pack2_current_A);
+                drawTextRow(c3X + 10, 154, c3W - 14, subBuf, COLOR_GREEN, COLOR_CARD_BG, 1);
+            }
+        } else {
+            snprintf(subBuf, sizeof(subBuf), "%s Strøm : OFFLINE", sName);
+            drawTextRow(c3X + 10, 154, c3W - 14, subBuf, COLOR_MID_GRAY, COLOR_CARD_BG, 1);
         }
 
         if (fabsf(bData.temperature_C - s_last_c3_temp) >= 0.2f) {
@@ -1284,7 +1355,7 @@ void UIManager::updateDynamicDashboard(const BatteryData& bData, const ScannerOv
             drawTextRow(c3X + 10, 172, c3W - 14, "Batteri Temp: --.- C", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
             drawTextRow(c3X + 10, 190, c3W - 14, "Maks Ladestr: 390 A", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
             drawTextRow(c3X + 10, 208, c3W - 14, "Maks Aflad  : 390 A", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-            drawTextRow(c3X + 10, 228, c3W - 14, "Status: Afventer CAN...", COLOR_ORANGE, COLOR_CARD_BG, 1);
+            drawTextRow(c3X + 10, 228, c3W - 14, "Status: Poller RS485...", COLOR_ORANGE, COLOR_CARD_BG, 1);
         }
     }
 
@@ -1433,31 +1504,35 @@ void UIManager::updateDynamicDashboard(const BatteryData& bData, const ScannerOv
             s_last_r_p1_soc = bData.pack1_soc_percent;
             s_last_r_p1_i = bData.pack1_current_A;
             s_last_r_p1_w = bData.pack1_power_W;
-            snprintf(subBuf, sizeof(subBuf), "Rosen (Master):  %u%% SOC | %+.1f A | %+.2f kW",
-                     bData.pack1_soc_percent, bData.pack1_current_A, bData.pack1_power_W / 1000.0f);
+            snprintf(subBuf, sizeof(subBuf), "%s (Master):  %u%% SOC | %+.1f A | %+.2f kW",
+                     mName, bData.pack1_soc_percent, bData.pack1_current_A, bData.pack1_power_W / 1000.0f);
             drawTextRow(p2X + 10, midY + 104, p2W - 20, subBuf, COLOR_CYAN, COLOR_CARD_BG, 1);
         }
 
-        if (bData.pack2_soc_percent != s_last_r_p2_soc ||
-            fabsf(bData.pack2_current_A - s_last_r_p2_i) >= 0.2f ||
-            fabsf(bData.pack2_power_W - s_last_r_p2_w) >= 20.0f) {
-            s_last_r_p2_soc = bData.pack2_soc_percent;
-            s_last_r_p2_i = bData.pack2_current_A;
-            s_last_r_p2_w = bData.pack2_power_W;
-            snprintf(subBuf, sizeof(subBuf), "RPT   (Slave) :  %u%% SOC | %+.1f A | %+.2f kW",
-                     bData.pack2_soc_percent, bData.pack2_current_A, bData.pack2_power_W / 1000.0f);
-            drawTextRow(p2X + 10, midY + 120, p2W - 20, subBuf, COLOR_GREEN, COLOR_CARD_BG, 1);
+        if (bData.pack2_online) {
+            if (bData.pack2_soc_percent != s_last_r_p2_soc ||
+                fabsf(bData.pack2_current_A - s_last_r_p2_i) >= 0.2f ||
+                fabsf(bData.pack2_power_W - s_last_r_p2_w) >= 20.0f) {
+                s_last_r_p2_soc = bData.pack2_soc_percent;
+                s_last_r_p2_i = bData.pack2_current_A;
+                s_last_r_p2_w = bData.pack2_power_W;
+                snprintf(subBuf, sizeof(subBuf), "%s (Slave) :  %u%% SOC | %+.1f A | %+.2f kW",
+                         sName, bData.pack2_soc_percent, bData.pack2_current_A, bData.pack2_power_W / 1000.0f);
+                drawTextRow(p2X + 10, midY + 120, p2W - 20, subBuf, COLOR_GREEN, COLOR_CARD_BG, 1);
+            }
+        } else {
+            snprintf(subBuf, sizeof(subBuf), "%s (Slave) :  OFFLINE / INGEN DATA", sName);
+            drawTextRow(p2X + 10, midY + 120, p2W - 20, subBuf, COLOR_MID_GRAY, COLOR_CARD_BG, 1);
         }
     }
 }
 
-// State tracking for Page 2 and Page 3 flicker elimination
-static bool s_diag_needs_full_redraw = true;
+// State tracking for Page 3 flicker elimination
 static bool s_scanner_needs_clear = true;
 
 // -----------------------------------------------------------------------------
 // Phase 2: Page 2 - Cell Balance & Voltage Diagnostics (Static Layout)
-// Drawn ONCE when entering Cell Diagnostics view to eliminate PSRAM bus saturation
+// Restored proven 16-cell profile with large legible bars and thermal/capacity panels
 // -----------------------------------------------------------------------------
 void UIManager::drawStaticCellDiagnostics() {
     s_diag_needs_full_redraw = true;
@@ -1465,51 +1540,71 @@ void UIManager::drawStaticCellDiagnostics() {
     // 1. Top Header Bar (Y: 0 to 44)
     fillRect(0, 0, LCD_WIDTH, 44, COLOR_NAVY);
     drawFastHLine(0, 44, LCD_WIDTH, COLOR_CYAN);
-    drawString(15, 6, "CELL VOLTAGE DIAGNOSTICS (32 CELLS)", COLOR_WHITE, COLOR_NAVY, 2);
+    drawString(15, 6, "CELL BALANCE & VOLTAGE DIAGNOSTICS", COLOR_WHITE, COLOR_NAVY, 2);
+    drawString(15, 26, "16-SERIES LiFePO4 INDIVIDUEL CELLEBALANCERING & DIAGNOSTIK", COLOR_CYAN, COLOR_NAVY, 1);
 
-    int pW = 784, pX = 8;
+    const int statY = 48;
+    const int statH = 54;
+    const int statW = 190;
 
-    // --- PANEL 1: BATTERI 1: ROSEN MASTER (Y: 48 to 232, H: 184) ---
-    int p1Y = 48, p1H = 184;
-    fillRect(pX, p1Y, pW, p1H, COLOR_CARD_BG);
-    drawRect(pX, p1Y, pW, p1H, COLOR_CARD_BORDER);
+    // Card 1: MIN CELL
+    fillRect(8, statY, statW, statH, COLOR_CARD_BG);
+    drawRect(8, statY, statW, statH, COLOR_CARD_BORDER);
+    drawString(16, statY + 6, "MIN CELLESPÆNDING", COLOR_CYAN, COLOR_CARD_BG, 1);
+    drawString(125, statY + 28, "(Laveste)", COLOR_MID_GRAY, COLOR_CARD_BG, 1);
 
-    // Header Strip (H: 22)
-    fillRect(pX, p1Y, pW, 22, COLOR_DARK_BLUE);
-    drawString(pX + 10, p1Y + 6, "BATTERI 1: ROSEN MASTER (51.2V 200Ah) - 16 CELLS", COLOR_CYAN, COLOR_DARK_BLUE, 1);
+    // Card 2: MAX CELL
+    fillRect(206, statY, statW, statH, COLOR_CARD_BG);
+    drawRect(206, statY, statW, statH, COLOR_CARD_BORDER);
+    drawString(214, statY + 6, "MAX CELLESPÆNDING", COLOR_YELLOW, COLOR_CARD_BG, 1);
+    drawString(320, statY + 28, "(Højeste)", COLOR_MID_GRAY, COLOR_CARD_BG, 1);
 
-    // Pack 1 Chart Baseline & Static Cell Labels
-    int base1Y = p1Y + 155;
-    drawFastHLine(pX + 10, base1Y, pW - 20, COLOR_MID_GRAY);
+    // Card 3: CELL DELTA (dV)
+    fillRect(404, statY, statW, statH, COLOR_CARD_BG);
+    drawRect(404, statY, statW, statH, COLOR_CARD_BORDER);
+    drawString(412, statY + 6, "CELLEDELTA (dV)", COLOR_CYAN, COLOR_CARD_BG, 1);
+
+    // Card 4: AVERAGE CELL
+    fillRect(602, statY, statW, statH, COLOR_CARD_BG);
+    drawRect(602, statY, statW, statH, COLOR_CARD_BORDER);
+    drawString(610, statY + 6, "GENNEMSNIT / CELLE", COLOR_WHITE, COLOR_CARD_BG, 1);
+    drawString(715, statY + 28, "(Total/16)", COLOR_MID_GRAY, COLOR_CARD_BG, 1);
+
+    // 3. Main 16-Cell Vertical Bar Chart (Y: 106 to 328, H: 222)
+    int grpX = 8, grpY = 106, grpW = 784, grpH = 222;
+    fillRect(grpX, grpY, grpW, grpH, COLOR_CARD_BG);
+    drawRect(grpX, grpY, grpW, grpH, COLOR_CARD_BORDER);
+
+    // Chart header strip (Y: 106 to 132, H: 26)
+    fillRect(grpX, grpY, grpW, 26, COLOR_DARK_BLUE);
+
+    // Chart baseline & cell labels
+    int baselineY = 282;
+    drawFastHLine(grpX + 15, baselineY, grpW - 30, COLOR_MID_GRAY);
 
     for (int i = 0; i < 16; i++) {
-        int barX = pX + 16 + i * 47;
+        int barX = grpX + 22 + i * 46;
         char cellLbl[6];
         snprintf(cellLbl, sizeof(cellLbl), "C%02d", i + 1);
-        drawString(barX + 5, base1Y + 5, cellLbl, COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        drawString(barX + 6, baselineY + 5, cellLbl, COLOR_CYAN, COLOR_CARD_BG, 1);
     }
 
-    // --- PANEL 2: BATTERI 2: RPT SLAVE (Y: 238 to 422, H: 184) ---
-    int p2Y = 238, p2H = 184;
-    fillRect(pX, p2Y, pW, p2H, COLOR_CARD_BG);
-    drawRect(pX, p2Y, pW, p2H, COLOR_CARD_BORDER);
+    // 4. Bottom Diagnostic Panels Row (Y: 332 to 424, H: 92)
+    int p1X = 8, pY = 332, pW = 388, pH = 92;
+    fillRect(p1X, pY, pW, pH, COLOR_CARD_BG);
+    drawRect(p1X, pY, pW, pH, COLOR_CARD_BORDER);
+    fillRect(p1X, pY, pW, 20, COLOR_DARK_BLUE);
+    drawString(p1X + 10, pY + 5, "BATTERIPAKKE TEMPERATUR & HEALTH", COLOR_CYAN, COLOR_DARK_BLUE, 1);
+    drawString(p1X + 12, pY + 68, "Termisk Status : Optimal (< 30 C) | Køling: Passiv Normal", COLOR_GREEN, COLOR_CARD_BG, 1);
 
-    // Header Strip (H: 22)
-    fillRect(pX, p2Y, pW, 22, COLOR_DARK_BLUE);
-    drawString(pX + 10, p2Y + 6, "BATTERI 2: RPT SLAVE (51.2V 300Ah) - 16 CELLS", COLOR_GREEN, COLOR_DARK_BLUE, 1);
+    int p2X = 404;
+    fillRect(p2X, pY, pW, pH, COLOR_CARD_BG);
+    drawRect(p2X, pY, pW, pH, COLOR_CARD_BORDER);
+    fillRect(p2X, pY, pW, 20, COLOR_DARK_BLUE);
+    drawString(p2X + 10, pY + 5, "BANK KAPACITET & BALANCERINGSSTATUS", COLOR_CYAN, COLOR_DARK_BLUE, 1);
+    drawString(p2X + 12, pY + 68, "BMS Balancering: Standby (Delta < 20mV er Optimal)", COLOR_CYAN, COLOR_CARD_BG, 1);
 
-    // Pack 2 Chart Baseline & Static Cell Labels
-    int base2Y = p2Y + 155;
-    drawFastHLine(pX + 10, base2Y, pW - 20, COLOR_MID_GRAY);
-
-    for (int i = 0; i < 16; i++) {
-        int barX = pX + 16 + i * 47;
-        char cellLbl[6];
-        snprintf(cellLbl, sizeof(cellLbl), "C%02d", i + 1);
-        drawString(barX + 5, base2Y + 5, cellLbl, COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-    }
-
-    // 3. Bottom Status & Navigation Bar (Tab 1 active)
+    // 5. Bottom Navigation Bar (Tab 1 active)
     drawBottomNav(1);
 }
 
@@ -1532,7 +1627,7 @@ void UIManager::updateDynamicCellDiagnostics(const BatteryData& bData, const Sca
     snprintf(upBuf2, sizeof(upBuf2), "UP: %02lu:%02lu:%02lu", upSec / 3600, (upSec % 3600) / 60, upSec % 60);
     drawTextRow(620, 8, 175, upBuf2, COLOR_LIGHT_GRAY, COLOR_NAVY, 1);
 
-    // LiPo Battery Status (Option A)
+    // LiPo Battery Status
     char lipoBuf[32];
     if (bData.lipo_connected) {
         snprintf(lipoBuf, sizeof(lipoBuf), "Lipo Bat: %.1fV (%u%%)", bData.lipo_voltage_V, bData.lipo_soc_percent);
@@ -1548,144 +1643,174 @@ void UIManager::updateDynamicCellDiagnostics(const BatteryData& bData, const Sca
     snprintf(deltaBuf, sizeof(deltaBuf), "Bank Delta: %.0fmV", bData.cellDelta_mV);
     drawTextRow(620, 24, 175, deltaBuf, COLOR_YELLOW, COLOR_NAVY, 1);
 
-    char subBuf[128];
-    int pW = 784, pX = 8;
-    int chartH = 95;
-
-    // --- PANEL 1: ROSEN MASTER ---
-    int p1Y = 48;
-    float p1Min = bData.pack1_minV > 2.0f ? bData.pack1_minV : (bData.minCellVoltage_V > 2.0f ? bData.minCellVoltage_V : 3.367f);
-    float p1Max = bData.pack1_maxV > 2.0f ? bData.pack1_maxV : (bData.maxCellVoltage_V > 2.0f ? bData.maxCellVoltage_V : 3.378f);
-
-    if (bData.communicationOK) {
-        snprintf(subBuf, sizeof(subBuf), "SOC: %u%%  Min: %.3fV  Max: %.3fV  dV: %.0fmV",
-                 bData.pack1_soc_percent, p1Min, p1Max, (p1Max - p1Min) * 1000.0f);
-    } else {
-        snprintf(subBuf, sizeof(subBuf), "Afventer CAN telemetri...");
-    }
-    drawTextRow(pX + 440, p1Y + 6, 335, subBuf, COLOR_WHITE, COLOR_DARK_BLUE, 1);
-
-    if (bData.communicationOK) {
-        snprintf(subBuf, sizeof(subBuf), "SOC: %u%%   Strøm: ~%+.1f A (Est. 40%%)   Effekt: %+.2f kW   Energi: ~%.1f kWh / 10.2 kWh",
-                 bData.pack1_soc_percent, bData.pack1_current_A, bData.pack1_power_W / 1000.0f,
-                 bData.pack1_energy_kwh);
-        drawTextRow(pX + 15, p1Y + 26, pW - 30, subBuf, COLOR_YELLOW, COLOR_CARD_BG, 1);
-    } else {
-        drawTextRow(pX + 15, p1Y + 26, pW - 30, "SOC: --%   Strøm: ~--.- A (Est. 40%)   Effekt: --- kW   Energi: ~--.- kWh   Afventer CAN telemetri...", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+    // Auto-select online pack if current selection is offline
+    if (_cell_view_pack == 1 && !bData.pack2_online && bData.pack1_online) {
+        _cell_view_pack = 0;
+    } else if (_cell_view_pack == 0 && !bData.pack1_online && bData.pack2_online) {
+        _cell_view_pack = 1;
     }
 
-    // Cache cell bar values to completely eliminate repetitive erasing and flickering
-    static int s_p1_last_mv[16] = { -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1 };
-    static uint16_t s_p1_last_col[16] = { 0 };
-    static int s_p2_last_mv[16] = { -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1 };
-    static uint16_t s_p2_last_col[16] = { 0 };
+    // Determine active battery pack for Page 2
+    const float* activeCells = bData.cellVoltages;
+    const char* curPackName = "BATTERIBANK";
+    float packMinV = bData.minCellVoltage_V;
+    float packMaxV = bData.maxCellVoltage_V;
+    float packDelta = bData.cellDelta_mV;
+    float packAvg = (bData.voltage_V > 10.0f) ? (bData.voltage_V / 16.0f) : 3.374f;
+    uint16_t packSoc = bData.soc_percent;
+
+    if (_cell_view_pack == 1 && (bData.pack2_cells_valid || bData.pack2_online)) {
+        activeCells = bData.pack2_cellVoltages;
+        curPackName = bData.pack2_name[0] ? bData.pack2_name : "ROSEN (200Ah)";
+        packMinV = bData.pack2_minV;
+        packMaxV = bData.pack2_maxV;
+        packDelta = (packMaxV - packMinV) * 1000.0f;
+        packSoc = bData.pack2_soc_percent;
+        float sum = 0;
+        for (int i = 0; i < 16; i++) sum += activeCells[i];
+        packAvg = sum / 16.0f;
+    } else if (_cell_view_pack == 0 && (bData.pack1_cells_valid || bData.pack1_online)) {
+        activeCells = bData.pack1_cellVoltages;
+        curPackName = bData.pack1_name[0] ? bData.pack1_name : "RPT (300Ah)";
+        packMinV = bData.pack1_minV;
+        packMaxV = bData.pack1_maxV;
+        packDelta = (packMaxV - packMinV) * 1000.0f;
+        packSoc = bData.pack1_soc_percent;
+        float sum = 0;
+        for (int i = 0; i < 16; i++) sum += activeCells[i];
+        packAvg = sum / 16.0f;
+    }
+
+    char subBuf[64];
+    const int statY = 48;
+
+    // Card 1: MIN CELL
+    snprintf(subBuf, sizeof(subBuf), "%.3f V", packMinV);
+    drawTextRow(20, statY + 24, 100, subBuf, COLOR_CYAN, COLOR_CARD_BG, 2);
+
+    // Card 2: MAX CELL
+    snprintf(subBuf, sizeof(subBuf), "%.3f V", packMaxV);
+    drawTextRow(218, statY + 24, 100, subBuf, COLOR_YELLOW, COLOR_CARD_BG, 2);
+
+    // Card 3: CELL DELTA (dV)
+    snprintf(subBuf, sizeof(subBuf), "%.0f mV", packDelta);
+    uint16_t dColor = (packDelta < 20.0f) ? COLOR_GREEN :
+                      ((packDelta < 50.0f) ? COLOR_YELLOW : COLOR_ORANGE);
+    drawTextRow(416, statY + 24, 90, subBuf, dColor, COLOR_CARD_BG, 2);
+    if (packDelta < 20.0f) {
+        drawTextRow(510, statY + 28, 75, "[PERFEKT]", COLOR_GREEN, COLOR_CARD_BG, 1);
+    } else if (packDelta < 50.0f) {
+        drawTextRow(510, statY + 28, 75, "[BALANCERET]", COLOR_YELLOW, COLOR_CARD_BG, 1);
+    } else {
+        drawTextRow(510, statY + 28, 75, "[UBALANCE]", COLOR_ORANGE, COLOR_CARD_BG, 1);
+    }
+
+    // Card 4: AVERAGE CELL
+    snprintf(subBuf, sizeof(subBuf), "%.3f V", packAvg);
+    drawTextRow(614, statY + 24, 100, subBuf, COLOR_WHITE, COLOR_CARD_BG, 2);
+
+    // 3. Main 16-Cell Vertical Bar Chart
+    int grpX = 8, grpY = 106, baselineY = 282, chartH = 145;
+    static int s_diag_last_mv[16] = { -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1 };
+    static uint16_t s_diag_last_col[16] = { 0 };
+
+    // Interactive Pack Tabs in Chart Header (Y: 106 to 132)
+    const char* p1Name = bData.pack1_name[0] ? bData.pack1_name : "RPT (300Ah)";
+    const char* p2Name = bData.pack2_name[0] ? bData.pack2_name : "ROSEN (200Ah)";
+
+    uint16_t t1Bg = (_cell_view_pack == 0) ? COLOR_CYAN : COLOR_DARK_GRAY;
+    uint16_t t1Fg = (_cell_view_pack == 0) ? COLOR_BLACK : COLOR_WHITE;
+    fillRect(grpX + 8, grpY + 3, 195, 20, t1Bg);
+    drawRect(grpX + 8, grpY + 3, 195, 20, COLOR_WHITE);
+    char p1Tab[32];
+    snprintf(p1Tab, sizeof(p1Tab), "1: %s [%s]", p1Name, bData.pack1_online ? "OK" : "--");
+    drawString(grpX + 16, grpY + 8, p1Tab, t1Fg, t1Bg, 1);
+
+    uint16_t t2Bg = (_cell_view_pack == 1) ? COLOR_CYAN : COLOR_DARK_GRAY;
+    uint16_t t2Fg = (_cell_view_pack == 1) ? COLOR_BLACK : COLOR_WHITE;
+    fillRect(grpX + 210, grpY + 3, 195, 20, t2Bg);
+    drawRect(grpX + 210, grpY + 3, 195, 20, COLOR_WHITE);
+    char p2Tab[32];
+    snprintf(p2Tab, sizeof(p2Tab), "2: %s [%s]", p2Name, bData.pack2_online ? "OK" : "--");
+    drawString(grpX + 218, grpY + 8, p2Tab, t2Fg, t2Bg, 1);
+
+    drawString(grpX + 418, grpY + 8, "Tryk fane for at skifte | Skala 3.25V->3.45V", COLOR_LIGHT_GRAY, COLOR_DARK_BLUE, 1);
 
     bool forceRedraw = s_diag_needs_full_redraw;
     s_diag_needs_full_redraw = false;
 
-    int base1Y = p1Y + 155;
     for (int i = 0; i < 16; i++) {
-        int barX = pX + 16 + i * 47;
+        int barX = grpX + 22 + i * 46;
         int barW = 34;
-        float v = bData.pack1_cellVoltages[i];
-        if (v < 2.0f) v = p1Min;
+        float v = activeCells[i];
+        if (v < 2.0f && packAvg > 2.0f) v = packAvg;
 
+        // Scale: 3.250V to 3.450V (span 0.200V = 145px)
         float clampedV = v;
         if (clampedV < 3.250f) clampedV = 3.250f;
         if (clampedV > 3.450f) clampedV = 3.450f;
         int bH = (int)(((clampedV - 3.250f) / 0.200f) * chartH);
-        if (bH < 10) bH = 10;
+        if (bH < 15) bH = 15;
         if (bH > chartH) bH = chartH;
-        int barY = base1Y - bH;
+        int barY = baselineY - bH;
 
         uint16_t bColor = COLOR_GREEN;
-        if (fabs(v - bData.minCellVoltage_V) < 0.0015f) bColor = COLOR_CYAN;
-        else if (fabs(v - bData.maxCellVoltage_V) < 0.0015f) bColor = COLOR_YELLOW;
+        if (fabs(v - packMinV) < 0.0015f) {
+            bColor = COLOR_CYAN;
+        } else if (fabs(v - packMaxV) < 0.0015f) {
+            bColor = COLOR_YELLOW;
+        }
 
         int curMv = (int)(v * 1000.0f + 0.5f);
-        if (!forceRedraw && curMv == s_p1_last_mv[i] && bColor == s_p1_last_col[i]) {
-            continue; // Unchanged: skip redrawing to eliminate PSRAM scanout flicker!
+        if (!forceRedraw && curMv == s_diag_last_mv[i] && bColor == s_diag_last_col[i]) {
+            continue;
         }
-        s_p1_last_mv[i] = curMv;
-        s_p1_last_col[i] = bColor;
+        s_diag_last_mv[i] = curMv;
+        s_diag_last_col[i] = bColor;
 
-        if (bData.communicationOK) {
-            fillRect(barX - 2, base1Y - chartH - 14, barW + 4, chartH + 14, COLOR_CARD_BG);
-            fillRect(barX, barY, barW, bH, bColor);
-            drawRect(barX, barY, barW, bH, COLOR_WHITE);
+        // Clear only bar column
+        fillRect(barX - 2, baselineY - chartH - 14, barW + 4, chartH + 14, COLOR_CARD_BG);
+        fillRect(barX, barY, barW, bH, bColor);
+        drawRect(barX, barY, barW, bH, COLOR_WHITE);
 
-            char mvStr[8];
-            snprintf(mvStr, sizeof(mvStr), "%d", curMv);
-            drawTextRow(barX + 5, barY - 10, barW - 6, mvStr, COLOR_WHITE, COLOR_CARD_BG, 1);
-        } else {
-            fillRect(barX - 2, base1Y - chartH - 14, barW + 4, chartH + 14, COLOR_CARD_BG);
-            drawRect(barX, base1Y - 15, barW, 15, COLOR_MID_GRAY);
-            drawTextRow(barX + 5, base1Y - 25, barW - 6, "---", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-        }
+        // Millivolts printed above bar
+        char mvStr[8];
+        snprintf(mvStr, sizeof(mvStr), "%d", curMv);
+        drawString(barX + 5, barY - 10, mvStr, COLOR_WHITE, COLOR_CARD_BG, 1);
+
+        // Delta from average below cell label
+        int dMv = (int)((v - packAvg) * 1000.0f);
+        char dBuf[8];
+        snprintf(dBuf, sizeof(dBuf), "%+d", dMv);
+        drawTextRow(barX + 6, baselineY + 18, 28, dBuf, COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
     }
 
-    // --- PANEL 2: RPT SLAVE ---
-    int p2Y = 238;
-    float p2Min = bData.pack2_minV > 2.0f ? bData.pack2_minV : (bData.minCellVoltage_V > 2.0f ? bData.minCellVoltage_V : 3.369f);
-    float p2Max = bData.pack2_maxV > 2.0f ? bData.pack2_maxV : (bData.maxCellVoltage_V > 2.0f ? bData.maxCellVoltage_V : 3.380f);
+    // 4. Bottom Diagnostic Panels Row
+    int p1X = 8, pY = 332;
+    float curTMin = (_cell_view_pack == 1) ? 24.0f : bData.minCellTemp_C;
+    float curTMax = (_cell_view_pack == 1) ? 25.0f : bData.maxCellTemp_C;
+    snprintf(subBuf, sizeof(subBuf), "Pakke: %-13s   Temp: Min %.1f C / Max %.1f C",
+             curPackName, curTMin, curTMax);
+    drawTextRow(p1X + 12, pY + 27, 360, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
 
-    if (bData.communicationOK) {
-        snprintf(subBuf, sizeof(subBuf), "SOC: %u%%  Min: %.3fV  Max: %.3fV  dV: %.0fmV",
-                 bData.pack2_soc_percent, p2Min, p2Max, (p2Max - p2Min) * 1000.0f);
-    } else {
-        snprintf(subBuf, sizeof(subBuf), "Afventer CAN telemetri...");
-    }
-    drawTextRow(pX + 440, p2Y + 6, 335, subBuf, COLOR_WHITE, COLOR_DARK_BLUE, 1);
+    float curI = (_cell_view_pack == 1) ? bData.pack2_current_A : bData.pack1_current_A;
+    float curP = (_cell_view_pack == 1) ? (bData.pack2_power_W / 1000.0f) : (bData.pack1_power_W / 1000.0f);
+    snprintf(subBuf, sizeof(subBuf), "Strøm: %+.1f A (%+.2f kW) | SOC: %u%% | SOH: %u%%",
+             curI, curP, (unsigned int)packSoc, bData.soh_percent);
+    drawTextRow(p1X + 12, pY + 47, 360, subBuf, COLOR_CYAN, COLOR_CARD_BG, 1);
 
-    if (bData.communicationOK) {
-        snprintf(subBuf, sizeof(subBuf), "SOC: %u%%   Strøm: ~%+.1f A (Est. 60%%)   Effekt: %+.2f kW   Energi: ~%.1f kWh / 15.4 kWh",
-                 bData.pack2_soc_percent, bData.pack2_current_A, bData.pack2_power_W / 1000.0f,
-                 bData.pack2_energy_kwh);
-        drawTextRow(pX + 15, p2Y + 26, pW - 30, subBuf, COLOR_GREEN, COLOR_CARD_BG, 1);
-    } else {
-        drawTextRow(pX + 15, p2Y + 26, pW - 30, "SOC: --%   Strøm: ~--.- A (Est. 60%)   Effekt: --- kW   Energi: ~--.- kWh   Afventer CAN telemetri...", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-    }
+    int p2X = 404;
+    float totalCap = (bData.totalCapacity_Ah > 0) ? bData.totalCapacity_Ah : 500.0f;
+    float estKwh = (totalCap * bData.voltage_V * (bData.soc_percent / 100.0f)) / 1000.0f;
+    float totalKwh = totalCap * 51.2f / 1000.0f;
 
-    int base2Y = p2Y + 155;
-    for (int i = 0; i < 16; i++) {
-        int barX = pX + 16 + i * 47;
-        int barW = 34;
-        float v = bData.pack2_cellVoltages[i];
-        if (v < 2.0f) v = p2Max;
+    snprintf(subBuf, sizeof(subBuf), "Fælles Bank: %.0f Ah (%.1f kWh) | Lagret: ~%.1f kWh",
+             totalCap, totalKwh, estKwh);
+    drawTextRow(p2X + 12, pY + 27, 360, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
 
-        float clampedV = v;
-        if (clampedV < 3.250f) clampedV = 3.250f;
-        if (clampedV > 3.450f) clampedV = 3.450f;
-        int bH = (int)(((clampedV - 3.250f) / 0.200f) * chartH);
-        if (bH < 10) bH = 10;
-        if (bH > chartH) bH = chartH;
-        int barY = base2Y - bH;
-
-        uint16_t bColor = COLOR_GREEN;
-        if (fabs(v - bData.minCellVoltage_V) < 0.0015f) bColor = COLOR_CYAN;
-        else if (fabs(v - bData.maxCellVoltage_V) < 0.0015f) bColor = COLOR_YELLOW;
-
-        int curMv = (int)(v * 1000.0f + 0.5f);
-        if (!forceRedraw && curMv == s_p2_last_mv[i] && bColor == s_p2_last_col[i]) {
-            continue; // Unchanged: skip redrawing to eliminate PSRAM scanout flicker!
-        }
-        s_p2_last_mv[i] = curMv;
-        s_p2_last_col[i] = bColor;
-
-        if (bData.communicationOK) {
-            fillRect(barX - 2, base2Y - chartH - 14, barW + 4, chartH + 14, COLOR_CARD_BG);
-            fillRect(barX, barY, barW, bH, bColor);
-            drawRect(barX, barY, barW, bH, COLOR_WHITE);
-
-            char mvStr[8];
-            snprintf(mvStr, sizeof(mvStr), "%d", curMv);
-            drawTextRow(barX + 5, barY - 10, barW - 6, mvStr, COLOR_WHITE, COLOR_CARD_BG, 1);
-        } else {
-            fillRect(barX - 2, base2Y - chartH - 14, barW + 4, chartH + 14, COLOR_CARD_BG);
-            drawRect(barX, base2Y - 15, barW, 15, COLOR_MID_GRAY);
-            drawTextRow(barX + 5, base2Y - 25, barW - 6, "---", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-        }
-    }
+    snprintf(subBuf, sizeof(subBuf), "Bank Strøm: %+.1f A | Total Spænding: %.2f V",
+             bData.current_A, bData.voltage_V);
+    drawTextRow(p2X + 12, pY + 47, 360, subBuf, COLOR_GREEN, COLOR_CARD_BG, 1);
 }
 
 // -----------------------------------------------------------------------------
@@ -1865,16 +1990,15 @@ void UIManager::drawStaticScanner() {
     drawString(p2X + 8, b2Y + 7, "HVAD BETYDER DISSE RAMMER?", COLOR_WHITE, COLOR_DARK_BLUE, 1);
 
     int infoY = b2Y + 30;
-    drawString(p2X + 8, infoY, "* 0x351: Spændings- og strømgrænser.", COLOR_GREEN, COLOR_CARD_BG, 1); infoY += 14;
-    drawString(p2X + 8, infoY, "* 0x355: Total SOC % og Sundhed (SOH).", COLOR_GREEN, COLOR_CARD_BG, 1); infoY += 14;
-    drawString(p2X + 8, infoY, "* 0x356: Total Spænding, Strøm og Temp.", COLOR_GREEN, COLOR_CARD_BG, 1); infoY += 14;
-    drawString(p2X + 8, infoY, "* 0x359: BMS Beskyttelse & Advarsler.", COLOR_CYAN, COLOR_CARD_BG, 1); infoY += 14;
-    drawString(p2X + 8, infoY, "* 0x35C: Charge / Discharge anmodning.", COLOR_CYAN, COLOR_CARD_BG, 1); infoY += 14;
-    drawString(p2X + 8, infoY, "* 0x35E: Fabrikant-streng (PYLON).", COLOR_CYAN, COLOR_CARD_BG, 1); infoY += 14;
-    drawString(p2X + 8, infoY, "* 0x373: Min/Max cellespænding & temp.", COLOR_YELLOW, COLOR_CARD_BG, 1); infoY += 14;
-    drawString(p2X + 8, infoY, "* 0x379: Nominel kapacitet (Ah).", COLOR_YELLOW, COLOR_CARD_BG, 1); infoY += 14;
-    drawString(p2X + 8, infoY, "* PROTOKOL: Deye / Pylontech (500 kbit/s).", COLOR_GREEN, COLOR_CARD_BG, 1); infoY += 14;
-    drawString(p2X + 8, infoY, "* SD KORT: Logger alle rammer til CSV-fil.", COLOR_YELLOW, COLOR_CARD_BG, 1);
+    drawString(p2X + 8, infoY, "* RS485: Multidrop poller alle 32 celler (P1 & P2).", COLOR_YELLOW, COLOR_CARD_BG, 1); infoY += 14;
+    drawString(p2X + 8, infoY, "* CAN GATEWAY: Sender Pylontech 500k til Deye.", COLOR_GREEN, COLOR_CARD_BG, 1); infoY += 14;
+    drawString(p2X + 8, infoY, "* 0x351: Dynamisk ladestrøm (throttler ved 3.42V).", COLOR_WHITE, COLOR_CARD_BG, 1); infoY += 14;
+    drawString(p2X + 8, infoY, "* 0x355: Fælles vægtet SOC % og SOH %.", COLOR_WHITE, COLOR_CARD_BG, 1); infoY += 14;
+    drawString(p2X + 8, infoY, "* 0x356: Bank total Volt, Strøm og højeste Temp.", COLOR_WHITE, COLOR_CARD_BG, 1); infoY += 14;
+    drawString(p2X + 8, infoY, "* 0x359: BMS beskyttelse (afbryder ved 3.65V/2.8V).", COLOR_CYAN, COLOR_CARD_BG, 1); infoY += 14;
+    drawString(p2X + 8, infoY, "* 0x35C: Charge / Discharge enable flags.", COLOR_CYAN, COLOR_CARD_BG, 1); infoY += 14;
+    drawString(p2X + 8, infoY, "* 0x35E: Fabrikant identifikation (PYLON).", COLOR_CYAN, COLOR_CARD_BG, 1); infoY += 14;
+    drawString(p2X + 8, infoY, "* SD KORT: Logger alle rammer til CSV-fil.", COLOR_GREEN, COLOR_CARD_BG, 1);
 
     // 5. Bottom Navigation Bar (Tab 2 active)
     drawBottomNav(2);
@@ -2062,51 +2186,263 @@ void UIManager::updateDynamicScanner(const ScannerOverview& overview, const Batt
 }
 
 // -----------------------------------------------------------------------------
-// Unified Bottom Navigation Bar with 3 Touch Tabs
+// Unified Bottom Navigation Bar with 4 Touch Tabs
 // -----------------------------------------------------------------------------
 void UIManager::drawBottomNav(uint8_t activePage) {
     fillRect(0, 430, LCD_WIDTH, 50, COLOR_NAVY);
     drawFastHLine(0, 430, LCD_WIDTH, COLOR_CYAN);
 
     int tY = 435, tH = 38;
+    int tabW = 188;
 
-    // Tab 1: DASHBOARD (X: 10, W: 250)
-    int t1X = 10, t1W = 250;
+    // Tab 0: DASHBOARD (X: 8, W: 188)
+    int t0X = 8;
     if (activePage == 0) {
-        fillRect(t1X, tY, t1W, tH, COLOR_DARK_BLUE);
-        drawRect(t1X, tY, t1W, tH, COLOR_CYAN);
-        drawString(t1X + 35, tY + 8, "[ 1. DASHBOARD ]", COLOR_WHITE, COLOR_DARK_BLUE, 1);
-        drawString(t1X + 45, tY + 22, "Main Storage View", COLOR_CYAN, COLOR_DARK_BLUE, 1);
+        fillRect(t0X, tY, tabW, tH, COLOR_DARK_BLUE);
+        drawRect(t0X, tY, tabW, tH, COLOR_CYAN);
+        drawString(t0X + 18, tY + 8, "[ 1. DASHBOARD ]", COLOR_WHITE, COLOR_DARK_BLUE, 1);
+        drawString(t0X + 28, tY + 22, "Main Storage View", COLOR_CYAN, COLOR_DARK_BLUE, 1);
     } else {
-        fillRect(t1X, tY, t1W, tH, COLOR_CARD_BG);
-        drawRect(t1X, tY, t1W, tH, COLOR_MID_GRAY);
-        drawString(t1X + 45, tY + 14, "1. DASHBOARD", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        fillRect(t0X, tY, tabW, tH, COLOR_CARD_BG);
+        drawRect(t0X, tY, tabW, tH, COLOR_MID_GRAY);
+        drawString(t0X + 28, tY + 14, "1. DASHBOARD", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
     }
 
-    // Tab 2: CELL DIAGNOSTICS (X: 275, W: 250)
-    int t2X = 275, t2W = 250;
+    // Tab 1: CELL DIAGNOSTICS (X: 206, W: 188)
+    int t1X = 206;
     if (activePage == 1) {
-        fillRect(t2X, tY, t2W, tH, COLOR_DARK_BLUE);
-        drawRect(t2X, tY, t2W, tH, COLOR_CYAN);
-        drawString(t2X + 25, tY + 8, "[ 2. CELLS (32S) ]", COLOR_WHITE, COLOR_DARK_BLUE, 1);
-        drawString(t2X + 35, tY + 22, "Rosen + RPT (16+16)", COLOR_CYAN, COLOR_DARK_BLUE, 1);
+        fillRect(t1X, tY, tabW, tH, COLOR_DARK_BLUE);
+        drawRect(t1X, tY, tabW, tH, COLOR_CYAN);
+        drawString(t1X + 14, tY + 8, "[ 2. CELLS (16S) ]", COLOR_WHITE, COLOR_DARK_BLUE, 1);
+        drawString(t1X + 22, tY + 22, "Cell Balance & OCV", COLOR_CYAN, COLOR_DARK_BLUE, 1);
     } else {
-        fillRect(t2X, tY, t2W, tH, COLOR_CARD_BG);
-        drawRect(t2X, tY, t2W, tH, COLOR_MID_GRAY);
-        drawString(t2X + 35, tY + 14, "2. CELLS (32S)", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        fillRect(t1X, tY, tabW, tH, COLOR_CARD_BG);
+        drawRect(t1X, tY, tabW, tH, COLOR_MID_GRAY);
+        drawString(t1X + 26, tY + 14, "2. CELLS (16S)", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
     }
 
-    // Tab 3: CAN SCANNER (X: 540, W: 250)
-    int t3X = 540, t3W = 250;
+    // Tab 2: CAN SCANNER (X: 404, W: 188)
+    int t2X = 404;
     if (activePage == 2) {
-        fillRect(t3X, tY, t3W, tH, COLOR_DARK_BLUE);
-        drawRect(t3X, tY, t3W, tH, COLOR_CYAN);
-        drawString(t3X + 40, tY + 8, "[ 3. CAN SCANNER ]", COLOR_WHITE, COLOR_DARK_BLUE, 1);
-        drawString(t3X + 45, tY + 22, "Raw Telegram Inspector", COLOR_CYAN, COLOR_DARK_BLUE, 1);
+        fillRect(t2X, tY, tabW, tH, COLOR_DARK_BLUE);
+        drawRect(t2X, tY, tabW, tH, COLOR_CYAN);
+        drawString(t2X + 14, tY + 8, "[ 3. CAN SCANNER ]", COLOR_WHITE, COLOR_DARK_BLUE, 1);
+        drawString(t2X + 20, tY + 22, "Raw Frame Inspector", COLOR_CYAN, COLOR_DARK_BLUE, 1);
+    } else {
+        fillRect(t2X, tY, tabW, tH, COLOR_CARD_BG);
+        drawRect(t2X, tY, tabW, tH, COLOR_MID_GRAY);
+        drawString(t2X + 24, tY + 14, "3. CAN SCANNER", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+    }
+
+    // Tab 3: RS485 & GATEWAY MONITOR (X: 602, W: 190)
+    int t3X = 602;
+    int t3W = 190;
+    if (activePage == 3) {
+        fillRect(t3X, tY, t3W, tH, COLOR_DARK_GREEN);
+        drawRect(t3X, tY, t3W, tH, COLOR_GREEN);
+        drawString(t3X + 14, tY + 8, "[ 4. RS485 / GW ]", COLOR_WHITE, COLOR_DARK_GREEN, 1);
+        drawString(t3X + 20, tY + 22, "Live Bus Monitor", COLOR_YELLOW, COLOR_DARK_GREEN, 1);
     } else {
         fillRect(t3X, tY, t3W, tH, COLOR_CARD_BG);
         drawRect(t3X, tY, t3W, tH, COLOR_MID_GRAY);
-        drawString(t3X + 50, tY + 14, "3. CAN SCANNER", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        drawString(t3X + 24, tY + 14, "4. RS485 / GW", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Page 4 - RS485 Bus Monitor & CAN Gateway Status (Static Layout)
+// -----------------------------------------------------------------------------
+void UIManager::drawStaticConfig() {
+    // 1. Header Bar (Y: 0 to 44)
+    fillRect(0, 0, LCD_WIDTH, 44, COLOR_NAVY);
+    drawFastHLine(0, 44, LCD_WIDTH, COLOR_CYAN);
+    drawString(15, 6, "RS485 BUS MONITOR & CAN GATEWAY STATUS", COLOR_WHITE, COLOR_NAVY, 2);
+
+    // =========================================================================
+    // BOX 1 (Top Left, X: 8, Y: 48, W: 388, H: 172)
+    // RS485 INDGANG (BATTERIER -> DISPLAY)
+    // =========================================================================
+    int b1X = 8, b1Y = 48, b1W = 388, b1H = 172;
+    fillRect(b1X, b1Y, b1W, b1H, COLOR_CARD_BG);
+    drawRect(b1X, b1Y, b1W, b1H, COLOR_CARD_BORDER);
+    fillRect(b1X, b1Y, b1W, 22, COLOR_CARD_HEADER);
+    drawString(b1X + 10, b1Y + 6, "RS485 INDGANG (BATTERIER -> DISPLAY)", COLOR_CYAN, COLOR_CARD_HEADER, 1);
+
+    drawString(b1X + 12, b1Y + 30, "Port & HW   : UART1 (TX:GPIO16, RX:GPIO15)", COLOR_WHITE, COLOR_CARD_BG, 1);
+    drawString(b1X + 12, b1Y + 48, "Transceiver : SP3485 (Auto-DIR, 2-pin Stik J7)", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+    drawString(b1X + 12, b1Y + 66, "Protokol    : Pylon ASCII / Modbus RTU", COLOR_WHITE, COLOR_CARD_BG, 1);
+    drawString(b1X + 12, b1Y + 84, "Baudrate    : ", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+    drawString(b1X + 12, b1Y + 102, "TX Sendt    : ", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+    drawString(b1X + 12, b1Y + 120, "RX Modtaget : ", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+    drawString(b1X + 12, b1Y + 138, "Sidste RX   : ", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+    drawString(b1X + 12, b1Y + 154, "Status      : ", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+
+    // =========================================================================
+    // BOX 2 (Top Right, X: 404, Y: 48, W: 388, H: 172)
+    // BATTERI ENHEDER PÅ RS485 BUSSEN
+    // =========================================================================
+    int b2X = 404, b2Y = 48, b2W = 388, b2H = 172;
+    fillRect(b2X, b2Y, b2W, b2H, COLOR_CARD_BG);
+    drawRect(b2X, b2Y, b2W, b2H, COLOR_CARD_BORDER);
+    fillRect(b2X, b2Y, b2W, 22, COLOR_CARD_HEADER);
+    drawString(b2X + 10, b2Y + 6, "BATTERI ENHEDER PÅ RS485 BUSSEN", COLOR_CYAN, COLOR_CARD_HEADER, 1);
+
+    // Sub-card 1: RPT (300 Ah)
+    int p1Y = b2Y + 28, p1H = 64;
+    fillRect(b2X + 8, p1Y, b2W - 16, p1H, COLOR_DARK_GRAY);
+    drawRect(b2X + 8, p1Y, b2W - 16, p1H, COLOR_MID_GRAY);
+    drawString(b2X + 16, p1Y + 6, "ENHED 1: RPT (300 Ah) - DIP ADRESSE 1", COLOR_WHITE, COLOR_DARK_GRAY, 1);
+
+    // Sub-card 2: ROSEN (200 Ah)
+    int p2Y = b2Y + 98, p2H = 64;
+    fillRect(b2X + 8, p2Y, b2W - 16, p2H, COLOR_DARK_GRAY);
+    drawRect(b2X + 8, p2Y, b2W - 16, p2H, COLOR_MID_GRAY);
+    drawString(b2X + 16, p2Y + 6, "ENHED 2: ROSEN (200 Ah) - DIP ADRESSE 2", COLOR_WHITE, COLOR_DARK_GRAY, 1);
+
+    // =========================================================================
+    // BOX 3 (Bottom Left, X: 8, Y: 226, W: 388, H: 190)
+    // CAN UDGANG (DISPLAY -> DEYE INVERTER)
+    // =========================================================================
+    int b3X = 8, b3Y = 226, b3W = 388, b3H = 190;
+    fillRect(b3X, b3Y, b3W, b3H, COLOR_CARD_BG);
+    drawRect(b3X, b3Y, b3W, b3H, COLOR_CARD_BORDER);
+    fillRect(b3X, b3Y, b3W, 22, COLOR_CARD_HEADER);
+    drawString(b3X + 10, b3Y + 6, "CAN UDGANG (DISPLAY -> DEYE INVERTER)", COLOR_CYAN, COLOR_CARD_HEADER, 1);
+
+    drawString(b3X + 12, b3Y + 30, "Port & HW   : TWAI Controller @ 500 kbit/s", COLOR_WHITE, COLOR_CARD_BG, 1);
+    drawString(b3X + 12, b3Y + 48, "Transceiver : TJA1051 (EXIO5 CAN_SEL = Aktiv)", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+    drawString(b3X + 12, b3Y + 66, "CAN Stik    : Stik J8 / Pin 4 (CAN-H), Pin 5 (CAN-L)", COLOR_WHITE, COLOR_CARD_BG, 1);
+    drawString(b3X + 12, b3Y + 84, "CAN Rammer  : 0x351, 0x355, 0x356, 0x359, 0x35C, 0x35E", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+    drawString(b3X + 12, b3Y + 102, "Sikkerhed   : Dynamisk dV throttling aktiv", COLOR_YELLOW, COLOR_CARD_BG, 1);
+    drawString(b3X + 12, b3Y + 120, "Gateway     : ", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+    drawString(b3X + 12, b3Y + 144, "Displayet samler RS485 telemetri fra RPT (300Ah) og", COLOR_MID_GRAY, COLOR_CARD_BG, 1);
+    drawString(b3X + 12, b3Y + 160, "Rosen (200Ah) og leverer samlet 500Ah data til Deye.", COLOR_MID_GRAY, COLOR_CARD_BG, 1);
+
+    // =========================================================================
+    // BOX 4 (Bottom Right, X: 404, Y: 226, W: 388, H: 190)
+    // TEST & HARDWARE FEJLFINDINGSGUIDE
+    // =========================================================================
+    int b4X = 404, b4Y = 226, b4W = 388, b4H = 190;
+    fillRect(b4X, b4Y, b4W, b4H, COLOR_CARD_BG);
+    drawRect(b4X, b4Y, b4W, b4H, COLOR_CARD_BORDER);
+    fillRect(b4X, b4Y, b4W, 22, COLOR_CARD_HEADER);
+    drawString(b4X + 10, b4Y + 6, "TEST & HARDWARE FEJLFINDINGSGUIDE", COLOR_YELLOW, COLOR_CARD_HEADER, 1);
+
+    // Button 1: [ SKIFT BAUD ] (X: 416, Y: 254, W: 174, H: 36)
+    int btn1X = 416, btnY = 254, btnW = 174, btnH = 36;
+    fillRect(btn1X, btnY, btnW, btnH, COLOR_DARK_GRAY);
+    drawRect(btn1X, btnY, btnW, btnH, COLOR_CYAN);
+    drawString(btn1X + 18, btnY + 8, "[ SKIFT BAUD ]", COLOR_WHITE, COLOR_DARK_GRAY, 1);
+    drawString(btn1X + 22, btnY + 22, "9600 <-> 115200", COLOR_CYAN, COLOR_DARK_GRAY, 1);
+
+    // Button 2: [ TEST POLL NU ] (X: 604, Y: 254, W: 174, H: 36)
+    int btn2X = 604;
+    fillRect(btn2X, btnY, btnW, btnH, COLOR_DARK_GREEN);
+    drawRect(btn2X, btnY, btnW, btnH, COLOR_GREEN);
+    drawString(btn2X + 18, btnY + 8, "[ TEST POLL NU ]", COLOR_WHITE, COLOR_DARK_GREEN, 1);
+    drawString(btn2X + 22, btnY + 22, "Send TX Foresp.", COLOR_YELLOW, COLOR_DARK_GREEN, 1);
+
+    // Fejlfindingstekst
+    drawString(b4X + 12, b4Y + 70, "1. HVIS 'RX Modtaget' = 0:", COLOR_YELLOW, COLOR_CARD_BG, 1);
+    drawString(b4X + 26, b4Y + 84, "Byt om pa A og B pa stik J7! (Meget hyppigt)", COLOR_WHITE, COLOR_CARD_BG, 1);
+    drawString(b4X + 12, b4Y + 102, "2. BATTERI DIP SWITCHES:", COLOR_YELLOW, COLOR_CARD_BG, 1);
+    drawString(b4X + 26, b4Y + 116, "RPT = ID 1 (1:ON, 2:OFF, 3:OFF, 4:OFF)", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+    drawString(b4X + 26, b4Y + 130, "Rosen = ID 2 (1:OFF, 2:ON, 3:OFF, 4:OFF)", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+    drawString(b4X + 12, b4Y + 148, "3. RJ45 PINOUT: Pin 7=A, Pin 8=B (eller Pin 1=B, 2=A)", COLOR_MID_GRAY, COLOR_CARD_BG, 1);
+    drawString(b4X + 12, b4Y + 164, "4. Tryk [SKIFT BAUD] hvis batteri korer 115200 bps.", COLOR_MID_GRAY, COLOR_CARD_BG, 1);
+
+    // Bottom Navigation Bar with Tab 3 active
+    drawBottomNav(3);
+}
+
+void UIManager::updateDynamicConfig(const BatteryData& bData) {
+    // Header IP & Uptime update
+    char wifiBuf[48];
+    if (BatteryWebServer::getInstance().isConnected()) {
+        snprintf(wifiBuf, sizeof(wifiBuf), "IP: %s", BatteryWebServer::getInstance().getIpAddress().c_str());
+        drawTextRow(450, 8, 160, wifiBuf, COLOR_GREEN, COLOR_NAVY, 1);
+    } else {
+        snprintf(wifiBuf, sizeof(wifiBuf), "WiFi: %s", BatteryWebServer::getInstance().getIpAddress().c_str());
+        drawTextRow(450, 8, 160, wifiBuf, COLOR_YELLOW, COLOR_NAVY, 1);
+    }
+
+    uint32_t upSec = millis() / 1000;
+    char upBuf[32];
+    snprintf(upBuf, sizeof(upBuf), "UP: %02lu:%02lu:%02lu", upSec / 3600, (upSec % 3600) / 60, upSec % 60);
+    drawTextRow(620, 8, 175, upBuf, COLOR_LIGHT_GRAY, COLOR_NAVY, 1);
+
+    // Box 1: RS485 Dynamic Fields
+    int b1X = 8, b1Y = 48;
+    char dynBuf[96];
+
+    // Baudrate
+    snprintf(dynBuf, sizeof(dynBuf), "%lu bps", (unsigned long)Rs485BatteryManager::getInstance().getBaudrate());
+    drawTextRow(b1X + 90, b1Y + 84, 280, dynBuf, COLOR_CYAN, COLOR_CARD_BG, 1);
+
+    // TX Sendt
+    snprintf(dynBuf, sizeof(dynBuf), "%lu foresporgsler", (unsigned long)Rs485BatteryManager::getInstance().getTxQueries());
+    drawTextRow(b1X + 90, b1Y + 102, 280, dynBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+
+    // RX Modtaget
+    uint32_t rxBytes = Rs485BatteryManager::getInstance().getRawRxBytes();
+    if (rxBytes == 0) {
+        snprintf(dynBuf, sizeof(dynBuf), "0 bytes (Ingen signaler endnu)");
+        drawTextRow(b1X + 90, b1Y + 120, 280, dynBuf, COLOR_ORANGE, COLOR_CARD_BG, 1);
+    } else {
+        snprintf(dynBuf, sizeof(dynBuf), "%lu bytes modtaget OK", (unsigned long)rxBytes);
+        drawTextRow(b1X + 90, b1Y + 120, 280, dynBuf, COLOR_GREEN, COLOR_CARD_BG, 1);
+    }
+
+    // Sidste RX Hex Preview
+    const char* rxHex = Rs485BatteryManager::getInstance().getLastRxHexString();
+    if (rxHex && strlen(rxHex) > 0) {
+        drawTextRow(b1X + 90, b1Y + 138, 280, rxHex, COLOR_YELLOW, COLOR_CARD_BG, 1);
+    } else {
+        drawTextRow(b1X + 90, b1Y + 138, 280, "Afventer data...", COLOR_MID_GRAY, COLOR_CARD_BG, 1);
+    }
+
+    // Status
+    if (bData.pack1_online || bData.pack2_online) {
+        drawTextRow(b1X + 90, b1Y + 154, 280, "FORBUNDET & MODTAGER DATA", COLOR_GREEN, COLOR_CARD_BG, 1);
+    } else if (rxBytes > 0) {
+        drawTextRow(b1X + 90, b1Y + 154, 280, "RA DATA MODTAGET (AFKODER)", COLOR_YELLOW, COLOR_CARD_BG, 1);
+    } else {
+        drawTextRow(b1X + 90, b1Y + 154, 280, "POLLER... (Tjek A/B eller Baud)", COLOR_ORANGE, COLOR_CARD_BG, 1);
+    }
+
+    // Box 2: Pack Status Dynamic Fields
+    int b2X = 404, b2Y = 48;
+    int p1Y = b2Y + 28;
+    int p2Y = b2Y + 98;
+
+    // Pack 1 (RPT)
+    if (bData.pack1_online) {
+        snprintf(dynBuf, sizeof(dynBuf), "ONLINE: %u%% SOC  |  %+.1fA  |  Min:%.3fV Max:%.3fV",
+                 bData.pack1_soc_percent, bData.pack1_current_A, bData.pack1_minV, bData.pack1_maxV);
+        drawTextRow(b2X + 16, p1Y + 24, 345, dynBuf, COLOR_GREEN, COLOR_DARK_GRAY, 1);
+        drawTextRow(b2X + 16, p1Y + 42, 345, "Telemetri synkroniseret | 32S Celler OK", COLOR_CYAN, COLOR_DARK_GRAY, 1);
+    } else {
+        drawTextRow(b2X + 16, p1Y + 24, 345, "OFFLINE: Afventer svar pa ID 1...", COLOR_ORANGE, COLOR_DARK_GRAY, 1);
+        drawTextRow(b2X + 16, p1Y + 42, 345, "Tjek RPT DIP: 1=ON, 2=OFF, 3=OFF, 4=OFF", COLOR_LIGHT_GRAY, COLOR_DARK_GRAY, 1);
+    }
+
+    // Pack 2 (Rosen)
+    if (bData.pack2_online) {
+        snprintf(dynBuf, sizeof(dynBuf), "ONLINE: %u%% SOC  |  %+.1fA  |  Min:%.3fV Max:%.3fV",
+                 bData.pack2_soc_percent, bData.pack2_current_A, bData.pack2_minV, bData.pack2_maxV);
+        drawTextRow(b2X + 16, p2Y + 24, 345, dynBuf, COLOR_GREEN, COLOR_DARK_GRAY, 1);
+        drawTextRow(b2X + 16, p2Y + 42, 345, "Telemetri synkroniseret | 16S Celler OK", COLOR_CYAN, COLOR_DARK_GRAY, 1);
+    } else {
+        drawTextRow(b2X + 16, p2Y + 24, 345, "OFFLINE: Afventer svar pa ID 2...", COLOR_ORANGE, COLOR_DARK_GRAY, 1);
+        drawTextRow(b2X + 16, p2Y + 42, 345, "Tjek Rosen DIP: 1=OFF, 2=ON, 3=OFF, 4=OFF", COLOR_LIGHT_GRAY, COLOR_DARK_GRAY, 1);
+    }
+
+    // Box 3: CAN Gateway Dynamic Status
+    int b3X = 8, b3Y = 226;
+    if (bData.communicationOK) {
+        drawTextRow(b3X + 90, b3Y + 120, 280, "SENDER LIVE DATA TIL DEYE", COLOR_GREEN, COLOR_CARD_BG, 1);
+    } else {
+        drawTextRow(b3X + 90, b3Y + 120, 280, "SENDER SIKKERHEDS-DATA (0A)", COLOR_YELLOW, COLOR_CARD_BG, 1);
     }
 }
 
@@ -2124,8 +2460,10 @@ void UIManager::updateDisplay() {
             drawStaticDashboard();
         } else if (_view_mode == UI_VIEW_CELL_DIAGNOSTICS) {
             drawStaticCellDiagnostics();
-        } else {
+        } else if (_view_mode == UI_VIEW_CAN_SCANNER) {
             drawStaticScanner();
+        } else if (_view_mode == UI_VIEW_CONFIG) {
+            drawStaticConfig();
         }
     }
 
@@ -2140,13 +2478,11 @@ void UIManager::updateDisplay() {
         updateDynamicDashboard(bData, overview);
     } else if (_view_mode == UI_VIEW_CELL_DIAGNOSTICS) {
         updateDynamicCellDiagnostics(bData, overview);
-    } else {
+    } else if (_view_mode == UI_VIEW_CAN_SCANNER) {
         updateDynamicScanner(overview, bData);
-    }
-
-    // Update display: if fallback framebuffer was allocated, blit to RGB panel
-    if (!_is_direct_fb) {
-        esp_lcd_panel_draw_bitmap(_panel_handle, 0, 0, LCD_WIDTH, LCD_HEIGHT, _framebuffer);
+    } else if (_view_mode == UI_VIEW_CONFIG) {
+        updateDynamicConfig(bData);
     }
 }
+
 

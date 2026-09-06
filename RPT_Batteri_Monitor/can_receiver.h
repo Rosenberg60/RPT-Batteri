@@ -1,5 +1,11 @@
 #pragma once
 
+// =============================================================================
+// PROJEKT : RPT-Batterimonitor med Waveshare ESP32-S3-Touch-LCD-7 (Rev 1.2)
+// MODUL   : can_receiver.h (TWAI CAN Receiver & Gateway Transmitter Header)
+// DATO/TID: 2026-09-06 19:32:00
+// =============================================================================
+
 #include <Arduino.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -37,6 +43,9 @@ public:
 
     // Get snapshot of most recent frames for live display (thread-safe)
     size_t getRecentFrames(CanFrameRaw* out_array, size_t max_count);
+
+    // Transmit a raw CAN frame over TWAI (thread-safe, timeout 15ms)
+    bool transmitFrame(uint32_t id, const uint8_t* data, uint8_t dlc, bool extended = false);
 
     // Check if CAN driver is installed and running
     bool isRunning() const { return _driver_installed; }

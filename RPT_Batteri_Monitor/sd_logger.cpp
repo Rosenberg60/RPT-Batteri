@@ -1,3 +1,9 @@
+// =============================================================================
+// PROJEKT : RPT-Batterimonitor med Waveshare ESP32-S3-Touch-LCD-7 (Rev 1.2)
+// MODUL   : sd_logger.cpp
+// DATO/TID: 2026-09-06 19:32:00
+// =============================================================================
+
 #include "sd_logger.h"
 #include "board_config.h"
 #include "ui.h"
