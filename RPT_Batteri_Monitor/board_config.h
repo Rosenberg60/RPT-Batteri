@@ -1,5 +1,11 @@
 #pragma once
 
+// =============================================================================
+// PROJEKT : RPT-Batterimonitor med Waveshare ESP32-S3-Touch-LCD-7 (Rev 1.2)
+// VERSION : v1.5.0 (10MHz PCLK, Robust Porches, Zero-Flicker & Multi-Core Safe)
+// DATO/TID: 2026-09-06 11:34:00
+// =============================================================================
+
 #include <Arduino.h>
 #include "driver/gpio.h"
 
@@ -86,7 +92,9 @@
 // -----------------------------------------------------------------------------
 #define LCD_WIDTH                   800
 #define LCD_HEIGHT                  480
-#define LCD_PIXEL_CLOCK_HZ          (16 * 1000 * 1000) // 16 MHz standard ST7262 pixel clock (Powersupply R4850G6 verified standard)
+// 10 MHz pixel clock completely eliminates PSRAM GDMA starvation/underflow
+// and prevents vertical screen shift / rolling on Waveshare 7.0" (ST7262)
+#define LCD_PIXEL_CLOCK_HZ          (10 * 1000 * 1000)
 
 #define LCD_PIN_VSYNC               GPIO_NUM_3
 #define LCD_PIN_HSYNC               GPIO_NUM_46
@@ -127,10 +135,11 @@
 #define LOG_PRINTF(...)   do { Serial.printf(__VA_ARGS__);  } while(0)
 #endif
 
-// Timing parameters for Waveshare 7.0" 800x480 RGB Panel (ST7262) - Official Waveshare Board Definition
-#define LCD_TIMING_HPW              4
-#define LCD_TIMING_HBP              8
+// Timing parameters for Waveshare 7.0" 800x480 RGB Panel (ST7262) - Robust Databook Specification
+#define LCD_TIMING_HPW              10
+#define LCD_TIMING_HBP              43
 #define LCD_TIMING_HFP              8
-#define LCD_TIMING_VPW              4
-#define LCD_TIMING_VBP              8
-#define LCD_TIMING_VFP              8
+#define LCD_TIMING_VPW              8
+#define LCD_TIMING_VBP              16
+#define LCD_TIMING_VFP              16
+

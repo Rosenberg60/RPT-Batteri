@@ -1,7 +1,7 @@
 // =============================================================================
 // PROJEKT : RPT-Batterimonitor med Waveshare ESP32-S3-Touch-LCD-7 (Rev 1.2)
-// VERSION : v1.4.7 (LiPo Battery Telemetry via Option A: TP1 -> GPIO 6)
-// DATO/TID: 2026-09-05 15:30:00
+// VERSION : v1.5.0 (Rock-Solid 10MHz Display Timing, Zero-Flicker & Cache Fix)
+// DATO/TID: 2026-09-06 11:34:00
 // =============================================================================
 
 #include <Arduino.h>
@@ -25,7 +25,7 @@ void printStartupBanner() {
     LOG_PRINTLN("   RPT & ROSEN BATTERY STORAGE DASHBOARD - PHASE 2");
     LOG_PRINTLN("   Target Hardware: Waveshare ESP32-S3-Touch-LCD-7 (Rev 1.2)");
     LOG_PRINTLN("   Screen: 7.0 inch IPS RGB (800x480) - ST7262 Driver");
-    LOG_PRINTLN("   Firmware Date  : 2026-09-05 15:30:00 (v1.4.7 LiPo Option A)");
+    LOG_PRINTLN("   Firmware Date  : 2026-09-06 11:34:00 (v1.5.0 Rock-Solid Display)");
     LOG_PRINTF( "   Compile Time   : %s %s\n", __DATE__, __TIME__);
     LOG_PRINTLN("================================================================================");
     LOG_PRINTF("   CAN Controller : ESP32-S3 TWAI (TX: GPIO%d, RX: GPIO%d)\n",
@@ -122,7 +122,7 @@ void setup() {
     delay(200);
 
     LOG_PRINTLN("\n\n================================================================================");
-    LOG_PRINTF( ">>> ESP32-S3 RPT BATTERY MONITOR - COMPILED: %s %s (v1.4.7) <<<\n", __DATE__, __TIME__);
+    LOG_PRINTF( ">>> ESP32-S3 RPT BATTERY MONITOR - COMPILED: %s %s (v1.5.0) <<<\n", __DATE__, __TIME__);
     printStartupBanner();
 
     // 1. Initialize Board LiPo Battery ADC (Option A via TP1 & GPIO 6)

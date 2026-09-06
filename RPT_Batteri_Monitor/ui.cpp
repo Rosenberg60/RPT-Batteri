@@ -9,7 +9,6 @@
 #include "esp_lcd_panel_vendor.h"
 #include "esp_heap_caps.h"
 #include "esp_idf_version.h"
-#include "esp32s3/rom/cache.h"
 
 // -----------------------------------------------------------------------------
 // Standard 5x7 ASCII Font Table (characters 0x20 ' ' through 0x7E '~')
@@ -251,8 +250,7 @@ bool UIManager::begin() {
     panel_conf.timings.vsync_front_porch = LCD_TIMING_VFP;
     panel_conf.timings.flags.pclk_active_neg = 1; // ST7262 clock latch polarity
     panel_conf.data_width = 16;
-#if defined(ESP_IDF_VERSION) && (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 2, 0))
-    panel_conf.num_fbs = 1;
+#if defined(ESP_IDF_VERSION) && (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0))
     panel_conf.bounce_buffer_size_px = LCD_WIDTH * 10; // 8000 px SRAM bounce buffer avoids PSRAM DMA starvation
 #endif
     panel_conf.sram_trans_align = 4;
@@ -336,7 +334,6 @@ bool UIManager::begin() {
 
     // Initial clear & render test screen (triggers GDMA transmission start)
     fillScreen(COLOR_BLACK);
-    Cache_WriteBack_All();
     esp_lcd_panel_draw_bitmap(_panel_handle, 0, 0, LCD_WIDTH, LCD_HEIGHT, _framebuffer);
 
     _initialized = true;
@@ -636,11 +633,15 @@ void UIManager::checkTouch() {
     }
 }
 
+static bool s_dash_needs_full_redraw = true;
+
 // -----------------------------------------------------------------------------
 // Phase 2: Page 1 - Graphical Battery Storage Dashboard (Static Layout)
 // Drawn ONCE when entering Dashboard view to eliminate PSRAM bus saturation
 // -----------------------------------------------------------------------------
 void UIManager::drawStaticDashboard() {
+    s_dash_needs_full_redraw = true;
+
     // 1. Top Header Bar (Y: 0 to 44)
     fillRect(0, 0, LCD_WIDTH, 44, COLOR_NAVY);
     drawFastHLine(0, 44, LCD_WIDTH, COLOR_CYAN);
@@ -772,43 +773,188 @@ void UIManager::updateDynamicDashboard(const BatteryData& bData, const ScannerOv
         drawStaticDashboard();
     }
 
+    // State tracking variables to completely eliminate flicker on Page 1
+    static bool s_last_wifi_connected = false;
+    static String s_last_ip = "";
+    static uint32_t s_last_upSec = 0xFFFFFFFF;
+    static uint8_t s_last_lipo_soc = 0xFF;
+    static float s_last_lipo_v = -1.0f;
+    static bool s_last_lipo_conn = false;
+    static uint32_t s_last_rx_update = 0xFFFFFFFF;
+    static int s_last_badge_state = -1;
+
+    // Card 0 cached state
+    static uint8_t s_last_c0_soc = 0xFF;
+    static uint8_t s_last_c0_p1_soc = 0xFF;
+    static uint8_t s_last_c0_p2_soc = 0xFF;
+    static uint16_t s_last_c0_cap = 0xFFFF;
+    static uint8_t s_last_c0_soh = 0xFF;
+    static float s_last_c0_kwh = -1.0f;
+
+    // Card 1 cached state
+    static float s_last_c1_power = -99999.0f;
+    static int s_last_c1_mode = -1; // 0=standby, 1=chg, 2=dchg
+    static float s_last_c1_p1_p = -99999.0f;
+    static float s_last_c1_p2_p = -99999.0f;
+    static float s_last_c1_chg_lim = -1.0f;
+    static float s_last_c1_dchg_lim = -1.0f;
+
+    // Card 2 cached state
+    static float s_last_c2_v = -1.0f;
+    static float s_last_c2_avg = -1.0f;
+    static float s_last_c2_chg_v = -1.0f;
+    static float s_last_c2_dchg_v = -1.0f;
+    static float s_last_c2_delta = -1.0f;
+    static float s_last_c2_min = -1.0f;
+
+    // Card 3 cached state
+    static float s_last_c3_cur = -99999.0f;
+    static float s_last_c3_peak_chg = -1.0f;
+    static float s_last_c3_peak_dchg = 1.0f;
+    static float s_last_c3_p1_i = -99999.0f;
+    static float s_last_c3_p2_i = -99999.0f;
+    static float s_last_c3_temp = -999.0f;
+    static float s_last_c3_chg_lim = -1.0f;
+    static float s_last_c3_dchg_lim = -1.0f;
+
+    // Lower panels cached state
+    static float s_last_low_min_v = -1.0f;
+    static float s_last_low_max_v = -1.0f;
+    static float s_last_low_delta = -1.0f;
+    static int s_last_gauge_min_px = -1;
+    static int s_last_gauge_max_px = -1;
+    static float s_last_min_temp = -999.0f;
+    static float s_last_max_temp = -999.0f;
+    static float s_last_bms_temp = -999.0f;
+    static uint8_t s_last_bms_soh = 0xFF;
+    static float s_last_low_kwh = -1.0f;
+
+    static int8_t s_last_chg_allowed = -1;
+    static int8_t s_last_dchg_allowed = -1;
+    static int8_t s_last_alarm_state = -1;
+    static float s_last_chg_v_lim = -1.0f;
+    static float s_last_chg_a_lim = -1.0f;
+    static float s_last_dchg_a_lim = -1.0f;
+    static uint8_t s_last_r_p1_soc = 0xFF;
+    static float s_last_r_p1_i = -999.0f;
+    static float s_last_r_p1_w = -99999.0f;
+    static uint8_t s_last_r_p2_soc = 0xFF;
+    static float s_last_r_p2_i = -999.0f;
+    static float s_last_r_p2_w = -99999.0f;
+
+    // If a full redraw was requested, invalidate all caches
+    if (s_dash_needs_full_redraw) {
+        s_dash_needs_full_redraw = false;
+        s_last_upSec = 0xFFFFFFFF;
+        s_last_lipo_soc = 0xFF;
+        s_last_lipo_v = -1.0f;
+        s_last_rx_update = 0xFFFFFFFF;
+        s_last_badge_state = -1;
+        s_last_c0_soc = 0xFF;
+        s_last_c0_p1_soc = 0xFF;
+        s_last_c0_p2_soc = 0xFF;
+        s_last_c0_cap = 0xFFFF;
+        s_last_c0_soh = 0xFF;
+        s_last_c0_kwh = -1.0f;
+        s_last_c1_power = -99999.0f;
+        s_last_c1_mode = -1;
+        s_last_c1_p1_p = -99999.0f;
+        s_last_c1_p2_p = -99999.0f;
+        s_last_c1_chg_lim = -1.0f;
+        s_last_c1_dchg_lim = -1.0f;
+        s_last_c2_v = -1.0f;
+        s_last_c2_avg = -1.0f;
+        s_last_c2_chg_v = -1.0f;
+        s_last_c2_dchg_v = -1.0f;
+        s_last_c2_delta = -1.0f;
+        s_last_c2_min = -1.0f;
+        s_last_c3_cur = -99999.0f;
+        s_last_c3_peak_chg = -1.0f;
+        s_last_c3_peak_dchg = 1.0f;
+        s_last_c3_p1_i = -99999.0f;
+        s_last_c3_p2_i = -99999.0f;
+        s_last_c3_temp = -999.0f;
+        s_last_c3_chg_lim = -1.0f;
+        s_last_c3_dchg_lim = -1.0f;
+        s_last_low_min_v = -1.0f;
+        s_last_low_max_v = -1.0f;
+        s_last_low_delta = -1.0f;
+        s_last_gauge_min_px = -1;
+        s_last_gauge_max_px = -1;
+        s_last_min_temp = -999.0f;
+        s_last_max_temp = -999.0f;
+        s_last_bms_temp = -999.0f;
+        s_last_bms_soh = 0xFF;
+        s_last_low_kwh = -1.0f;
+        s_last_chg_allowed = -1;
+        s_last_dchg_allowed = -1;
+        s_last_alarm_state = -1;
+        s_last_chg_v_lim = -1.0f;
+        s_last_chg_a_lim = -1.0f;
+        s_last_dchg_a_lim = -1.0f;
+        s_last_r_p1_soc = 0xFF;
+        s_last_r_p1_i = -999.0f;
+        s_last_r_p1_w = -99999.0f;
+        s_last_r_p2_soc = 0xFF;
+        s_last_r_p2_i = -999.0f;
+        s_last_r_p2_w = -99999.0f;
+    }
+
     // 1. Header Bar Updates (in-place text updates without wiping whole navy header)
-    char wifiBuf[48];
-    if (BatteryWebServer::getInstance().isConnected()) {
-        snprintf(wifiBuf, sizeof(wifiBuf), "IP: %s", BatteryWebServer::getInstance().getIpAddress().c_str());
-        drawTextRow(325, 8, 140, wifiBuf, COLOR_GREEN, COLOR_NAVY, 1);
-    } else {
-        drawTextRow(325, 8, 140, "WiFi: Standby", COLOR_YELLOW, COLOR_NAVY, 1);
+    bool cur_wifi = BatteryWebServer::getInstance().isConnected();
+    String cur_ip = cur_wifi ? BatteryWebServer::getInstance().getIpAddress() : "";
+    if (cur_wifi != s_last_wifi_connected || cur_ip != s_last_ip) {
+        s_last_wifi_connected = cur_wifi;
+        s_last_ip = cur_ip;
+        char wifiBuf[48];
+        if (cur_wifi) {
+            snprintf(wifiBuf, sizeof(wifiBuf), "IP: %s", cur_ip.c_str());
+            drawTextRow(325, 8, 140, wifiBuf, COLOR_GREEN, COLOR_NAVY, 1);
+        } else {
+            drawTextRow(325, 8, 140, "WiFi: Standby", COLOR_YELLOW, COLOR_NAVY, 1);
+        }
     }
 
     uint32_t upSec = millis() / 1000;
-    char upBuf[32];
-    snprintf(upBuf, sizeof(upBuf), "UP: %02lu:%02lu:%02lu", upSec / 3600, (upSec % 3600) / 60, upSec % 60);
-    drawTextRow(470, 8, 75, upBuf, COLOR_LIGHT_GRAY, COLOR_NAVY, 1);
+    if (upSec != s_last_upSec) {
+        s_last_upSec = upSec;
+        char upBuf[32];
+        snprintf(upBuf, sizeof(upBuf), "UP: %02lu:%02lu:%02lu", upSec / 3600, (upSec % 3600) / 60, upSec % 60);
+        drawTextRow(470, 8, 75, upBuf, COLOR_LIGHT_GRAY, COLOR_NAVY, 1);
+    }
 
     // LiPo Battery Status (Option A via TP1 & GPIO 6)
-    char lipoBuf[32];
-    if (bData.lipo_connected) {
-        snprintf(lipoBuf, sizeof(lipoBuf), "Lipo Bat: %.1fV (%u%%)", bData.lipo_voltage_V, bData.lipo_soc_percent);
-        uint16_t lipoColor = (bData.lipo_soc_percent >= 40) ? COLOR_GREEN :
-                             ((bData.lipo_soc_percent >= 20) ? COLOR_YELLOW : COLOR_RED);
-        drawTextRow(325, 24, 140, lipoBuf, lipoColor, COLOR_NAVY, 1);
-    } else {
-        snprintf(lipoBuf, sizeof(lipoBuf), "Lipo Bat: N/A");
-        drawTextRow(325, 24, 140, lipoBuf, COLOR_MID_GRAY, COLOR_NAVY, 1);
+    if (bData.lipo_connected != s_last_lipo_conn ||
+        bData.lipo_soc_percent != s_last_lipo_soc ||
+        fabsf(bData.lipo_voltage_V - s_last_lipo_v) >= 0.08f) {
+        s_last_lipo_conn = bData.lipo_connected;
+        s_last_lipo_soc = bData.lipo_soc_percent;
+        s_last_lipo_v = bData.lipo_voltage_V;
+        char lipoBuf[32];
+        if (bData.lipo_connected) {
+            snprintf(lipoBuf, sizeof(lipoBuf), "Lipo Bat: %.1fV (%u%%)", bData.lipo_voltage_V, bData.lipo_soc_percent);
+            uint16_t lipoColor = (bData.lipo_soc_percent >= 40) ? COLOR_GREEN :
+                                 ((bData.lipo_soc_percent >= 20) ? COLOR_YELLOW : COLOR_RED);
+            drawTextRow(325, 24, 140, lipoBuf, lipoColor, COLOR_NAVY, 1);
+        } else {
+            drawTextRow(325, 24, 140, "Lipo Bat: N/A", COLOR_MID_GRAY, COLOR_NAVY, 1);
+        }
     }
 
-    char rxBuf[32];
-    if (bData.communicationOK && bData.lastUpdate_ms > 0) {
-        uint32_t ageMs = (millis() >= bData.lastUpdate_ms) ? (millis() - bData.lastUpdate_ms) : 0;
-        snprintf(rxBuf, sizeof(rxBuf), "RX: %lums", (unsigned long)ageMs);
-    } else {
-        snprintf(rxBuf, sizeof(rxBuf), "RX: Wait");
+    // RX Status
+    if (bData.lastUpdate_ms != s_last_rx_update) {
+        s_last_rx_update = bData.lastUpdate_ms;
+        char rxBuf[32];
+        if (bData.communicationOK && bData.lastUpdate_ms > 0) {
+            uint32_t ageMs = (millis() >= bData.lastUpdate_ms) ? (millis() - bData.lastUpdate_ms) : 0;
+            snprintf(rxBuf, sizeof(rxBuf), "RX: %lums", (unsigned long)ageMs);
+        } else {
+            snprintf(rxBuf, sizeof(rxBuf), "RX: Wait");
+        }
+        drawTextRow(470, 24, 75, rxBuf, COLOR_LIGHT_GRAY, COLOR_NAVY, 1);
     }
-    drawTextRow(470, 24, 75, rxBuf, COLOR_LIGHT_GRAY, COLOR_NAVY, 1);
 
-    // Header Right Badge: BMS Online / Modules (updated only when badge state changes)
-    static int s_last_badge_state = -1;
+    // Header Right Badge: BMS Online / Modules
     int cur_badge_state = bData.communicationOK ? (bData.moduleCount >= 2 ? 2 : 1) : 0;
     if (cur_badge_state != s_last_badge_state) {
         s_last_badge_state = cur_badge_state;
@@ -830,7 +976,6 @@ void UIManager::updateDynamicDashboard(const BatteryData& bData, const ScannerOv
         }
     }
 
-    const int cardY = 48;
     const int cardW = 190;
     char valBuf[32];
     char subBuf[64];
@@ -838,149 +983,205 @@ void UIManager::updateDynamicDashboard(const BatteryData& bData, const ScannerOv
     // --- CARD 0: STATE OF CHARGE (SOC) - ENLARGED HERO ---
     int c0X = 8;
     if (bData.communicationOK) {
-        uint16_t socColor = (bData.soc_percent >= 40) ? COLOR_GREEN :
-                            ((bData.soc_percent >= 20) ? COLOR_YELLOW : COLOR_RED);
-        snprintf(valBuf, sizeof(valBuf), "%u %%", bData.soc_percent);
-        drawTextRow(c0X + 14, 76, 120, valBuf, socColor, COLOR_CARD_BG, 4);
+        if (bData.soc_percent != s_last_c0_soc) {
+            s_last_c0_soc = bData.soc_percent;
+            uint16_t socColor = (bData.soc_percent >= 40) ? COLOR_GREEN :
+                                ((bData.soc_percent >= 20) ? COLOR_YELLOW : COLOR_RED);
+            snprintf(valBuf, sizeof(valBuf), "%u %%", bData.soc_percent);
+            drawTextRow(c0X + 14, 76, 120, valBuf, socColor, COLOR_CARD_BG, 4);
 
-        int socFillW = (156 * bData.soc_percent) / 100;
-        if (socFillW > 156) socFillW = 156;
-        if (socFillW > 0) fillRect(c0X + 14, 112, socFillW, 12, socColor);
-        if (socFillW < 156) fillRect(c0X + 14 + socFillW, 112, 156 - socFillW, 12, COLOR_CARD_BG);
+            int socFillW = (156 * bData.soc_percent) / 100;
+            if (socFillW > 156) socFillW = 156;
+            if (socFillW > 0) fillRect(c0X + 14, 112, socFillW, 12, socColor);
+            if (socFillW < 156) fillRect(c0X + 14 + socFillW, 112, 156 - socFillW, 12, COLOR_CARD_BG);
+        }
 
-        snprintf(subBuf, sizeof(subBuf), "Rosen Master: %u %%", bData.pack1_soc_percent);
-        drawTextRow(c0X + 10, 136, cardW - 14, subBuf, COLOR_CYAN, COLOR_CARD_BG, 1);
+        if (bData.pack1_soc_percent != s_last_c0_p1_soc) {
+            s_last_c0_p1_soc = bData.pack1_soc_percent;
+            snprintf(subBuf, sizeof(subBuf), "Rosen Master: %u %%", bData.pack1_soc_percent);
+            drawTextRow(c0X + 10, 136, cardW - 14, subBuf, COLOR_CYAN, COLOR_CARD_BG, 1);
+        }
 
-        snprintf(subBuf, sizeof(subBuf), "RPT   Slave : %u %%", bData.pack2_soc_percent);
-        drawTextRow(c0X + 10, 154, cardW - 14, subBuf, COLOR_GREEN, COLOR_CARD_BG, 1);
+        if (bData.pack2_soc_percent != s_last_c0_p2_soc) {
+            s_last_c0_p2_soc = bData.pack2_soc_percent;
+            snprintf(subBuf, sizeof(subBuf), "RPT   Slave : %u %%", bData.pack2_soc_percent);
+            drawTextRow(c0X + 10, 154, cardW - 14, subBuf, COLOR_GREEN, COLOR_CARD_BG, 1);
+        }
 
-        snprintf(subBuf, sizeof(subBuf), "Total Kapacitet: %u Ah",
-                 bData.totalCapacity_Ah > 0 ? bData.totalCapacity_Ah : 501);
-        drawTextRow(c0X + 10, 172, cardW - 14, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+        if (bData.totalCapacity_Ah != s_last_c0_cap) {
+            s_last_c0_cap = bData.totalCapacity_Ah;
+            snprintf(subBuf, sizeof(subBuf), "Total Kapacitet: %u Ah",
+                     bData.totalCapacity_Ah > 0 ? bData.totalCapacity_Ah : 501);
+            drawTextRow(c0X + 10, 172, cardW - 14, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+        }
 
-        snprintf(subBuf, sizeof(subBuf), "Sundhed SOH    : %u%%",
-                 bData.soh_percent > 0 ? bData.soh_percent : 100);
-        drawTextRow(c0X + 10, 190, cardW - 14, subBuf, COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        if (bData.soh_percent != s_last_c0_soh) {
+            s_last_c0_soh = bData.soh_percent;
+            snprintf(subBuf, sizeof(subBuf), "Sundhed SOH    : %u%%",
+                     bData.soh_percent > 0 ? bData.soh_percent : 100);
+            drawTextRow(c0X + 10, 190, cardW - 14, subBuf, COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        }
 
         float estKwh = (bData.totalCapacity_Ah * bData.voltage_V * (bData.soc_percent / 100.0f)) / 1000.0f;
-        snprintf(subBuf, sizeof(subBuf), "Est. Energi    : ~%.1f kWh", estKwh);
-        drawTextRow(c0X + 10, 208, cardW - 14, subBuf, COLOR_YELLOW, COLOR_CARD_BG, 1);
-
-        drawTextRow(c0X + 10, 228, cardW - 14, "BMS Drift: Normal OK", COLOR_GREEN, COLOR_CARD_BG, 1);
+        if (fabsf(estKwh - s_last_c0_kwh) >= 0.1f) {
+            s_last_c0_kwh = estKwh;
+            snprintf(subBuf, sizeof(subBuf), "Est. Energi    : ~%.1f kWh", estKwh);
+            drawTextRow(c0X + 10, 208, cardW - 14, subBuf, COLOR_YELLOW, COLOR_CARD_BG, 1);
+        }
     } else {
-        drawTextRow(c0X + 14, 76, 120, "-- %", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 4);
-        fillRect(c0X + 14, 112, 156, 12, COLOR_CARD_BG);
-        drawTextRow(c0X + 10, 136, cardW - 14, "Rosen: -- % (Master 200A)", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-        drawTextRow(c0X + 10, 154, cardW - 14, "RPT  : -- % (Slave 300A)", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-        drawTextRow(c0X + 10, 172, cardW - 14, "Total Kapacitet: 501 Ah", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-        drawTextRow(c0X + 10, 190, cardW - 14, "Sundhed SOH    : 100%", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-        drawTextRow(c0X + 10, 208, cardW - 14, "Est. Energi    : --.- kWh", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-        drawTextRow(c0X + 10, 228, cardW - 14, "Status: Afventer CAN...", COLOR_ORANGE, COLOR_CARD_BG, 1);
+        if (s_last_c0_soc != 0xFE) {
+            s_last_c0_soc = 0xFE;
+            drawTextRow(c0X + 14, 76, 120, "-- %", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 4);
+            fillRect(c0X + 14, 112, 156, 12, COLOR_CARD_BG);
+            drawTextRow(c0X + 10, 136, cardW - 14, "Rosen: -- % (Master 200A)", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+            drawTextRow(c0X + 10, 154, cardW - 14, "RPT  : -- % (Slave 300A)", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+            drawTextRow(c0X + 10, 172, cardW - 14, "Total Kapacitet: 501 Ah", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+            drawTextRow(c0X + 10, 190, cardW - 14, "Sundhed SOH    : 100%", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+            drawTextRow(c0X + 10, 208, cardW - 14, "Est. Energi    : --.- kWh", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+            drawTextRow(c0X + 10, 228, cardW - 14, "Status: Afventer CAN...", COLOR_ORANGE, COLOR_CARD_BG, 1);
+        }
     }
 
     // --- CARD 1: STORAGE POWER - ENLARGED HERO ---
     int c1X = 206;
     if (bData.communicationOK) {
         float pKw = bData.power_W / 1000.0f;
-        // Always clear hero value box before rendering to prevent digit overlaps
-        fillRect(c1X + 10, 74, 172, 30, COLOR_CARD_BG);
-        if (bData.power_W > 50.0f) {
-            if (pKw >= 10.0f) {
-                snprintf(valBuf, sizeof(valBuf), "+%.1f kW", pKw);
-            } else {
-                snprintf(valBuf, sizeof(valBuf), "+%.2f kW", pKw);
+        int curMode = (bData.power_W > 50.0f) ? 1 : ((bData.power_W < -50.0f) ? 2 : 0);
+
+        if (curMode != s_last_c1_mode || fabsf(bData.power_W - s_last_c1_power) >= 15.0f) {
+            s_last_c1_power = bData.power_W;
+            bool modeChanged = (curMode != s_last_c1_mode);
+            s_last_c1_mode = curMode;
+
+            if (curMode == 1) { // Charging
+                if (pKw >= 10.0f) {
+                    snprintf(valBuf, sizeof(valBuf), "+%.1f kW", pKw);
+                } else {
+                    snprintf(valBuf, sizeof(valBuf), "+%.2f kW", pKw);
+                }
+                drawTextRow(c1X + 10, 76, 172, valBuf, COLOR_GREEN, COLOR_CARD_BG, 3);
+                if (modeChanged) {
+                    fillRect(c1X + 12, 106, 166, 22, COLOR_DARK_GREEN);
+                    drawRect(c1X + 12, 106, 166, 22, COLOR_GREEN);
+                    drawString(c1X + 22, 112, "CHARGING / OPLADNING", COLOR_WHITE, COLOR_DARK_GREEN, 1);
+                }
+            } else if (curMode == 2) { // Discharging
+                if (pKw <= -10.0f) {
+                    snprintf(valBuf, sizeof(valBuf), "%.1f kW", pKw);
+                } else {
+                    snprintf(valBuf, sizeof(valBuf), "%.2f kW", pKw);
+                }
+                drawTextRow(c1X + 10, 76, 172, valBuf, COLOR_ORANGE, COLOR_CARD_BG, 3);
+                if (modeChanged) {
+                    fillRect(c1X + 12, 106, 166, 22, 0x8200);
+                    drawRect(c1X + 12, 106, 166, 22, COLOR_ORANGE);
+                    drawString(c1X + 22, 112, "DISCHARGING / AFLAD", COLOR_WHITE, 0x8200, 1);
+                }
+            } else { // Standby
+                drawTextRow(c1X + 10, 76, 172, "0.00 kW", COLOR_CYAN, COLOR_CARD_BG, 3);
+                if (modeChanged) {
+                    fillRect(c1X + 12, 106, 166, 22, COLOR_DARK_GRAY);
+                    drawRect(c1X + 12, 106, 166, 22, COLOR_MID_GRAY);
+                    drawString(c1X + 38, 112, "STANDBY DRIFT", COLOR_WHITE, COLOR_DARK_GRAY, 1);
+                }
             }
-            drawTextRow(c1X + 10, 76, 172, valBuf, COLOR_GREEN, COLOR_CARD_BG, 3);
-            fillRect(c1X + 12, 106, 166, 22, COLOR_DARK_GREEN);
-            drawRect(c1X + 12, 106, 166, 22, COLOR_GREEN);
-            drawString(c1X + 22, 112, "CHARGING / OPLADNING", COLOR_WHITE, COLOR_DARK_GREEN, 1);
-        } else if (bData.power_W < -50.0f) {
-            if (pKw <= -10.0f) {
-                snprintf(valBuf, sizeof(valBuf), "%.1f kW", pKw);
-            } else {
-                snprintf(valBuf, sizeof(valBuf), "%.2f kW", pKw);
-            }
-            drawTextRow(c1X + 10, 76, 172, valBuf, COLOR_ORANGE, COLOR_CARD_BG, 3);
-            fillRect(c1X + 12, 106, 166, 22, 0x8200);
-            drawRect(c1X + 12, 106, 166, 22, COLOR_ORANGE);
-            drawString(c1X + 22, 112, "DISCHARGING / AFLAD", COLOR_WHITE, 0x8200, 1);
-        } else {
-            drawTextRow(c1X + 10, 76, 172, "0.00 kW", COLOR_CYAN, COLOR_CARD_BG, 3);
+            snprintf(subBuf, sizeof(subBuf), "Effekt Total: %+.2f kW", pKw);
+            drawTextRow(c1X + 10, 208, cardW - 14, subBuf, COLOR_YELLOW, COLOR_CARD_BG, 1);
+        }
+
+        if (fabsf(bData.pack1_power_W - s_last_c1_p1_p) >= 15.0f) {
+            s_last_c1_p1_p = bData.pack1_power_W;
+            snprintf(subBuf, sizeof(subBuf), "Rosen Effekt: %+.2f kW", bData.pack1_power_W / 1000.0f);
+            drawTextRow(c1X + 10, 136, cardW - 14, subBuf, COLOR_CYAN, COLOR_CARD_BG, 1);
+        }
+
+        if (fabsf(bData.pack2_power_W - s_last_c1_p2_p) >= 15.0f) {
+            s_last_c1_p2_p = bData.pack2_power_W;
+            snprintf(subBuf, sizeof(subBuf), "RPT   Effekt: %+.2f kW", bData.pack2_power_W / 1000.0f);
+            drawTextRow(c1X + 10, 154, cardW - 14, subBuf, COLOR_GREEN, COLOR_CARD_BG, 1);
+        }
+
+        if (bData.chargeCurrentLimit_A != s_last_c1_chg_lim) {
+            s_last_c1_chg_lim = bData.chargeCurrentLimit_A;
+            snprintf(subBuf, sizeof(subBuf), "Maks Ladning: %.0f A (~21kW)", bData.chargeCurrentLimit_A);
+            drawTextRow(c1X + 10, 172, cardW - 14, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+        }
+
+        if (bData.dischargeCurrentLimit_A != s_last_c1_dchg_lim) {
+            s_last_c1_dchg_lim = bData.dischargeCurrentLimit_A;
+            snprintf(subBuf, sizeof(subBuf), "Maks Aflad  : %.0f A (~20kW)", bData.dischargeCurrentLimit_A);
+            drawTextRow(c1X + 10, 190, cardW - 14, subBuf, COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        }
+    } else {
+        if (s_last_c1_mode != -2) {
+            s_last_c1_mode = -2;
+            drawTextRow(c1X + 10, 76, 172, "--- kW", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 3);
             fillRect(c1X + 12, 106, 166, 22, COLOR_DARK_GRAY);
             drawRect(c1X + 12, 106, 166, 22, COLOR_MID_GRAY);
             drawString(c1X + 38, 112, "STANDBY DRIFT", COLOR_WHITE, COLOR_DARK_GRAY, 1);
+            drawTextRow(c1X + 10, 136, cardW - 14, "Rosen Effekt: --- kW", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+            drawTextRow(c1X + 10, 154, cardW - 14, "RPT   Effekt: --- kW", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+            drawTextRow(c1X + 10, 172, cardW - 14, "Maks Ladning: 390 A", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+            drawTextRow(c1X + 10, 190, cardW - 14, "Maks Aflad  : 390 A", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+            drawTextRow(c1X + 10, 208, cardW - 14, "Effekt Total: --- kW", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+            drawTextRow(c1X + 10, 228, cardW - 14, "Status: Afventer CAN...", COLOR_ORANGE, COLOR_CARD_BG, 1);
         }
-        snprintf(subBuf, sizeof(subBuf), "Rosen Effekt: %+.2f kW", bData.pack1_power_W / 1000.0f);
-        drawTextRow(c1X + 10, 136, cardW - 14, subBuf, COLOR_CYAN, COLOR_CARD_BG, 1);
-
-        snprintf(subBuf, sizeof(subBuf), "RPT   Effekt: %+.2f kW", bData.pack2_power_W / 1000.0f);
-        drawTextRow(c1X + 10, 154, cardW - 14, subBuf, COLOR_GREEN, COLOR_CARD_BG, 1);
-
-        snprintf(subBuf, sizeof(subBuf), "Maks Ladning: %.0f A (~21kW)", bData.chargeCurrentLimit_A);
-        drawTextRow(c1X + 10, 172, cardW - 14, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
-
-        snprintf(subBuf, sizeof(subBuf), "Maks Aflad  : %.0f A (~20kW)", bData.dischargeCurrentLimit_A);
-        drawTextRow(c1X + 10, 190, cardW - 14, subBuf, COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-
-        snprintf(subBuf, sizeof(subBuf), "Effekt Total: %+.2f kW", pKw);
-        drawTextRow(c1X + 10, 208, cardW - 14, subBuf, COLOR_YELLOW, COLOR_CARD_BG, 1);
-
-        drawTextRow(c1X + 10, 228, cardW - 14, "Inverter Link: Aktiv", COLOR_GREEN, COLOR_CARD_BG, 1);
-    } else {
-        fillRect(c1X + 10, 74, 172, 30, COLOR_CARD_BG);
-        drawTextRow(c1X + 10, 76, 172, "--- kW", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 3);
-        fillRect(c1X + 12, 106, 166, 22, COLOR_DARK_GRAY);
-        drawRect(c1X + 12, 106, 166, 22, COLOR_MID_GRAY);
-        drawString(c1X + 38, 112, "STANDBY DRIFT", COLOR_WHITE, COLOR_DARK_GRAY, 1);
-
-        drawTextRow(c1X + 10, 136, cardW - 14, "Rosen Effekt: --- kW", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-        drawTextRow(c1X + 10, 154, cardW - 14, "RPT   Effekt: --- kW", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-        drawTextRow(c1X + 10, 172, cardW - 14, "Maks Ladning: 390 A", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-        drawTextRow(c1X + 10, 190, cardW - 14, "Maks Aflad  : 390 A", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-        drawTextRow(c1X + 10, 208, cardW - 14, "Effekt Total: --- kW", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-        drawTextRow(c1X + 10, 228, cardW - 14, "Status: Afventer CAN...", COLOR_ORANGE, COLOR_CARD_BG, 1);
     }
 
     // --- CARD 2: BANK VOLTAGE - ENLARGED HERO ---
     int c2X = 404;
     if (bData.communicationOK) {
-        snprintf(valBuf, sizeof(valBuf), "%.2f V", bData.voltage_V);
-        drawTextRow(c2X + 12, 76, 168, valBuf, COLOR_YELLOW, COLOR_CARD_BG, 4);
+        if (fabsf(bData.voltage_V - s_last_c2_v) >= 0.02f) {
+            s_last_c2_v = bData.voltage_V;
+            snprintf(valBuf, sizeof(valBuf), "%.2f V", bData.voltage_V);
+            drawTextRow(c2X + 12, 76, 168, valBuf, COLOR_YELLOW, COLOR_CARD_BG, 4);
 
-        float avgCell = (bData.voltage_V > 10.0f) ? (bData.voltage_V / 16.0f) : 0.0f;
-        fillRect(c2X + 12, 108, 166, 20, COLOR_DARK_GRAY);
-        drawRect(c2X + 12, 108, 166, 20, COLOR_MID_GRAY);
-        snprintf(subBuf, sizeof(subBuf), "Avg Celle: %.3f V", avgCell);
-        drawString(c2X + 18, 114, subBuf, COLOR_CYAN, COLOR_DARK_GRAY, 1);
+            float avgCell = (bData.voltage_V > 10.0f) ? (bData.voltage_V / 16.0f) : 0.0f;
+            if (fabsf(avgCell - s_last_c2_avg) >= 0.002f) {
+                s_last_c2_avg = avgCell;
+                snprintf(subBuf, sizeof(subBuf), "Avg Celle: %.3f V", avgCell);
+                drawTextRow(c2X + 18, 114, 154, subBuf, COLOR_CYAN, COLOR_DARK_GRAY, 1);
+            }
+        }
 
-        snprintf(subBuf, sizeof(subBuf), "Maks Ladesp. : %.2f V", bData.chargeVoltageLimit_V);
-        drawTextRow(c2X + 10, 136, cardW - 14, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+        if (fabsf(bData.chargeVoltageLimit_V - s_last_c2_chg_v) >= 0.05f) {
+            s_last_c2_chg_v = bData.chargeVoltageLimit_V;
+            snprintf(subBuf, sizeof(subBuf), "Maks Ladesp. : %.2f V", bData.chargeVoltageLimit_V);
+            drawTextRow(c2X + 10, 136, cardW - 14, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+        }
 
-        snprintf(subBuf, sizeof(subBuf), "Aflad Cut-off: %.2f V",
-                 bData.dischargeCutoffVoltage_V > 0 ? bData.dischargeCutoffVoltage_V : 44.8f);
-        drawTextRow(c2X + 10, 154, cardW - 14, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+        float cutoffV = bData.dischargeCutoffVoltage_V > 0 ? bData.dischargeCutoffVoltage_V : 44.8f;
+        if (fabsf(cutoffV - s_last_c2_dchg_v) >= 0.05f) {
+            s_last_c2_dchg_v = cutoffV;
+            snprintf(subBuf, sizeof(subBuf), "Aflad Cut-off: %.2f V", cutoffV);
+            drawTextRow(c2X + 10, 154, cardW - 14, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+        }
 
-        drawTextRow(c2X + 10, 172, cardW - 14, "Fælles Busbar: 51.2V 16S", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        if (fabsf(bData.cellDelta_mV - s_last_c2_delta) >= 1.0f) {
+            s_last_c2_delta = bData.cellDelta_mV;
+            snprintf(subBuf, sizeof(subBuf), "Celledelta dV: %.0f mV", bData.cellDelta_mV);
+            drawTextRow(c2X + 10, 190, cardW - 14, subBuf, COLOR_YELLOW, COLOR_CARD_BG, 1);
+        }
 
-        snprintf(subBuf, sizeof(subBuf), "Celledelta dV: %.0f mV", bData.cellDelta_mV);
-        drawTextRow(c2X + 10, 190, cardW - 14, subBuf, COLOR_YELLOW, COLOR_CARD_BG, 1);
-
-        snprintf(subBuf, sizeof(subBuf), "Spænding Min : %.3f V", bData.minCellVoltage_V);
-        drawTextRow(c2X + 10, 208, cardW - 14, subBuf, COLOR_CYAN, COLOR_CARD_BG, 1);
-
-        drawTextRow(c2X + 10, 228, cardW - 14, "BMS CAN Link : 500k OK", COLOR_GREEN, COLOR_CARD_BG, 1);
+        if (fabsf(bData.minCellVoltage_V - s_last_c2_min) >= 0.002f) {
+            s_last_c2_min = bData.minCellVoltage_V;
+            snprintf(subBuf, sizeof(subBuf), "Spænding Min : %.3f V", bData.minCellVoltage_V);
+            drawTextRow(c2X + 10, 208, cardW - 14, subBuf, COLOR_CYAN, COLOR_CARD_BG, 1);
+        }
     } else {
-        drawTextRow(c2X + 12, 76, 168, "--.-- V", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 4);
-        fillRect(c2X + 12, 108, 166, 20, COLOR_DARK_GRAY);
-        drawRect(c2X + 12, 108, 166, 20, COLOR_MID_GRAY);
-        drawString(c2X + 18, 114, "Avg Celle: -.--- V", COLOR_LIGHT_GRAY, COLOR_DARK_GRAY, 1);
-
-        drawTextRow(c2X + 10, 136, cardW - 14, "Maks Ladesp. : 57.60 V", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-        drawTextRow(c2X + 10, 154, cardW - 14, "Aflad Cut-off: 44.80 V", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-        drawTextRow(c2X + 10, 172, cardW - 14, "Fælles Busbar: 51.2V 16S", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-        drawTextRow(c2X + 10, 190, cardW - 14, "Celledelta dV: -- mV", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-        drawTextRow(c2X + 10, 208, cardW - 14, "Spænding Min : -.--- V", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-        drawTextRow(c2X + 10, 228, cardW - 14, "Status: Afventer CAN...", COLOR_ORANGE, COLOR_CARD_BG, 1);
+        if (s_last_c2_v != -2.0f) {
+            s_last_c2_v = -2.0f;
+            drawTextRow(c2X + 12, 76, 168, "--.-- V", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 4);
+            fillRect(c2X + 12, 108, 166, 20, COLOR_DARK_GRAY);
+            drawRect(c2X + 12, 108, 166, 20, COLOR_MID_GRAY);
+            drawString(c2X + 18, 114, "Avg Celle: -.--- V", COLOR_LIGHT_GRAY, COLOR_DARK_GRAY, 1);
+            drawTextRow(c2X + 10, 136, cardW - 14, "Maks Ladesp. : 57.60 V", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+            drawTextRow(c2X + 10, 154, cardW - 14, "Aflad Cut-off: 44.80 V", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+            drawTextRow(c2X + 10, 172, cardW - 14, "Fælles Busbar: 51.2V 16S", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+            drawTextRow(c2X + 10, 190, cardW - 14, "Celledelta dV: -- mV", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+            drawTextRow(c2X + 10, 208, cardW - 14, "Spænding Min : -.--- V", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+            drawTextRow(c2X + 10, 228, cardW - 14, "Status: Afventer CAN...", COLOR_ORANGE, COLOR_CARD_BG, 1);
+        }
     }
 
     // --- CARD 3: TOTAL & PEAK CURRENT - ENLARGED HERO ---
@@ -992,58 +1193,69 @@ void UIManager::updateDynamicDashboard(const BatteryData& bData, const ScannerOv
         if (bData.current_A > s_peak_chg_A) s_peak_chg_A = bData.current_A;
         if (bData.current_A < s_peak_dchg_A) s_peak_dchg_A = bData.current_A;
 
-        uint16_t curColor = (bData.current_A > 0.5f) ? COLOR_GREEN :
-                            ((bData.current_A < -0.5f) ? COLOR_ORANGE : COLOR_WHITE);
-
-        // Always clean hero current bounding box to guarantee no digit ghosting
-        fillRect(c3X + 10, 74, 172, 32, COLOR_CARD_BG);
-
-        // Format Total Current: if >= 100A or <= -100A, use Size 3 to comfortably fit inside card width!
-        snprintf(valBuf, sizeof(valBuf), "%+.1f A", bData.current_A);
-        if (fabsf(bData.current_A) >= 100.0f) {
-            // Size 3: 8 chars * 18px = 144px, centered in 170px width
-            drawTextRow(c3X + 14, 78, 164, valBuf, curColor, COLOR_CARD_BG, 3);
-        } else {
-            // Size 4: 7 chars * 24px = 168px
-            drawTextRow(c3X + 11, 76, 168, valBuf, curColor, COLOR_CARD_BG, 4);
+        if (fabsf(bData.current_A - s_last_c3_cur) >= 0.15f) {
+            s_last_c3_cur = bData.current_A;
+            uint16_t curColor = (bData.current_A > 0.5f) ? COLOR_GREEN :
+                                ((bData.current_A < -0.5f) ? COLOR_ORANGE : COLOR_WHITE);
+            snprintf(valBuf, sizeof(valBuf), "%+.1f A", bData.current_A);
+            if (fabsf(bData.current_A) >= 100.0f) {
+                drawTextRow(c3X + 14, 78, 164, valBuf, curColor, COLOR_CARD_BG, 3);
+            } else {
+                drawTextRow(c3X + 11, 76, 168, valBuf, curColor, COLOR_CARD_BG, 4);
+            }
         }
 
-        // Peak Current badge: 166x20 box
-        fillRect(c3X + 12, 108, 166, 20, 0x18C3);
-        drawRect(c3X + 12, 108, 166, 20, COLOR_CYAN);
-        float dchgPeak = (s_peak_dchg_A < -0.1f) ? s_peak_dchg_A : 0.0f;
-        snprintf(subBuf, sizeof(subBuf), "Peak: +%.0fA / %.0fA", s_peak_chg_A, dchgPeak);
-        drawTextRow(c3X + 16, 114, 158, subBuf, COLOR_YELLOW, 0x18C3, 1);
+        if (s_peak_chg_A != s_last_c3_peak_chg || s_peak_dchg_A != s_last_c3_peak_dchg) {
+            s_last_c3_peak_chg = s_peak_chg_A;
+            s_last_c3_peak_dchg = s_peak_dchg_A;
+            float dchgPeak = (s_peak_dchg_A < -0.1f) ? s_peak_dchg_A : 0.0f;
+            snprintf(subBuf, sizeof(subBuf), "Peak: +%.0fA / %.0fA", s_peak_chg_A, dchgPeak);
+            drawTextRow(c3X + 16, 114, 158, subBuf, COLOR_YELLOW, 0x18C3, 1);
+        }
 
-        snprintf(subBuf, sizeof(subBuf), "Rosen Strøm : %+.1f A", bData.pack1_current_A);
-        drawTextRow(c3X + 10, 136, c3W - 14, subBuf, COLOR_CYAN, COLOR_CARD_BG, 1);
+        if (fabsf(bData.pack1_current_A - s_last_c3_p1_i) >= 0.15f) {
+            s_last_c3_p1_i = bData.pack1_current_A;
+            snprintf(subBuf, sizeof(subBuf), "Rosen Strøm : %+.1f A", bData.pack1_current_A);
+            drawTextRow(c3X + 10, 136, c3W - 14, subBuf, COLOR_CYAN, COLOR_CARD_BG, 1);
+        }
 
-        snprintf(subBuf, sizeof(subBuf), "RPT   Strøm : %+.1f A", bData.pack2_current_A);
-        drawTextRow(c3X + 10, 154, c3W - 14, subBuf, COLOR_GREEN, COLOR_CARD_BG, 1);
+        if (fabsf(bData.pack2_current_A - s_last_c3_p2_i) >= 0.15f) {
+            s_last_c3_p2_i = bData.pack2_current_A;
+            snprintf(subBuf, sizeof(subBuf), "RPT   Strøm : %+.1f A", bData.pack2_current_A);
+            drawTextRow(c3X + 10, 154, c3W - 14, subBuf, COLOR_GREEN, COLOR_CARD_BG, 1);
+        }
 
-        snprintf(subBuf, sizeof(subBuf), "Batteri Temp: %.1f C", bData.temperature_C);
-        drawTextRow(c3X + 10, 172, c3W - 14, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+        if (fabsf(bData.temperature_C - s_last_c3_temp) >= 0.2f) {
+            s_last_c3_temp = bData.temperature_C;
+            snprintf(subBuf, sizeof(subBuf), "Batteri Temp: %.1f C", bData.temperature_C);
+            drawTextRow(c3X + 10, 172, c3W - 14, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+        }
 
-        snprintf(subBuf, sizeof(subBuf), "Maks Ladestr: %.0f A", bData.chargeCurrentLimit_A);
-        drawTextRow(c3X + 10, 190, c3W - 14, subBuf, COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        if (bData.chargeCurrentLimit_A != s_last_c3_chg_lim) {
+            s_last_c3_chg_lim = bData.chargeCurrentLimit_A;
+            snprintf(subBuf, sizeof(subBuf), "Maks Ladestr: %.0f A", bData.chargeCurrentLimit_A);
+            drawTextRow(c3X + 10, 190, c3W - 14, subBuf, COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        }
 
-        snprintf(subBuf, sizeof(subBuf), "Maks Aflad  : %.0f A", bData.dischargeCurrentLimit_A);
-        drawTextRow(c3X + 10, 208, c3W - 14, subBuf, COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-
-        drawTextRow(c3X + 10, 228, c3W - 14, "Fordeling: 40% / 60% OK", COLOR_GREEN, COLOR_CARD_BG, 1);
+        if (bData.dischargeCurrentLimit_A != s_last_c3_dchg_lim) {
+            s_last_c3_dchg_lim = bData.dischargeCurrentLimit_A;
+            snprintf(subBuf, sizeof(subBuf), "Maks Aflad  : %.0f A", bData.dischargeCurrentLimit_A);
+            drawTextRow(c3X + 10, 208, c3W - 14, subBuf, COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+        }
     } else {
-        fillRect(c3X + 10, 74, 172, 32, COLOR_CARD_BG);
-        drawTextRow(c3X + 10, 76, 170, "---.- A", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 4);
-        fillRect(c3X + 12, 108, 166, 20, COLOR_DARK_GRAY);
-        drawRect(c3X + 12, 108, 166, 20, COLOR_MID_GRAY);
-        drawTextRow(c3X + 16, 114, 158, "Peak: +0A / 0A", COLOR_LIGHT_GRAY, COLOR_DARK_GRAY, 1);
-
-        drawTextRow(c3X + 10, 136, c3W - 14, "Rosen Strøm : --.- A", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-        drawTextRow(c3X + 10, 154, c3W - 14, "RPT   Strøm : --.- A", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-        drawTextRow(c3X + 10, 172, c3W - 14, "Batteri Temp: --.- C", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-        drawTextRow(c3X + 10, 190, c3W - 14, "Maks Ladestr: 390 A", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-        drawTextRow(c3X + 10, 208, c3W - 14, "Maks Aflad  : 390 A", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
-        drawTextRow(c3X + 10, 228, c3W - 14, "Status: Afventer CAN...", COLOR_ORANGE, COLOR_CARD_BG, 1);
+        if (s_last_c3_cur != -99998.0f) {
+            s_last_c3_cur = -99998.0f;
+            drawTextRow(c3X + 10, 76, 170, "---.- A", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 4);
+            fillRect(c3X + 12, 108, 166, 20, COLOR_DARK_GRAY);
+            drawRect(c3X + 12, 108, 166, 20, COLOR_MID_GRAY);
+            drawTextRow(c3X + 16, 114, 158, "Peak: +0A / 0A", COLOR_LIGHT_GRAY, COLOR_DARK_GRAY, 1);
+            drawTextRow(c3X + 10, 136, c3W - 14, "Rosen Strøm : --.- A", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+            drawTextRow(c3X + 10, 154, c3W - 14, "RPT   Strøm : --.- A", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+            drawTextRow(c3X + 10, 172, c3W - 14, "Batteri Temp: --.- C", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+            drawTextRow(c3X + 10, 190, c3W - 14, "Maks Ladestr: 390 A", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+            drawTextRow(c3X + 10, 208, c3W - 14, "Maks Aflad  : 390 A", COLOR_LIGHT_GRAY, COLOR_CARD_BG, 1);
+            drawTextRow(c3X + 10, 228, c3W - 14, "Status: Afventer CAN...", COLOR_ORANGE, COLOR_CARD_BG, 1);
+        }
     }
 
     // 3. Lower Section: Compacted Detail Panels In-Place Updates (midY = 274, midH = 150)
@@ -1055,29 +1267,31 @@ void UIManager::updateDynamicDashboard(const BatteryData& bData, const ScannerOv
 
     if (bData.communicationOK) {
         // --- LEFT PANEL DYNAMIC UPDATES ---
-        // Explicitly clear value area in each metric box to eliminate previous digit remnants
-        fillRect(p1X + 10, midY + 38, 112, 20, COLOR_DARK_GRAY);
-        snprintf(subBuf, sizeof(subBuf), "%.3f V", bData.minCellVoltage_V);
-        drawTextRow(p1X + 14, midY + 39, 104, subBuf, COLOR_CYAN, COLOR_DARK_GRAY, 2);
+        if (fabsf(bData.minCellVoltage_V - s_last_low_min_v) >= 0.002f) {
+            s_last_low_min_v = bData.minCellVoltage_V;
+            snprintf(subBuf, sizeof(subBuf), "%.3f V", bData.minCellVoltage_V);
+            drawTextRow(p1X + 14, midY + 39, 104, subBuf, COLOR_CYAN, COLOR_DARK_GRAY, 2);
+        }
 
-        fillRect(p1X + 132, midY + 38, 112, 20, COLOR_DARK_GRAY);
-        snprintf(subBuf, sizeof(subBuf), "%.3f V", bData.maxCellVoltage_V);
-        drawTextRow(p1X + 136, midY + 39, 104, subBuf, COLOR_YELLOW, COLOR_DARK_GRAY, 2);
+        if (fabsf(bData.maxCellVoltage_V - s_last_low_max_v) >= 0.002f) {
+            s_last_low_max_v = bData.maxCellVoltage_V;
+            snprintf(subBuf, sizeof(subBuf), "%.3f V", bData.maxCellVoltage_V);
+            drawTextRow(p1X + 136, midY + 39, 104, subBuf, COLOR_YELLOW, COLOR_DARK_GRAY, 2);
+        }
 
-        // Delta Hero Box
-        fillRect(p1X + 254, midY + 38, 122, 20, COLOR_DARK_GRAY);
-        snprintf(subBuf, sizeof(subBuf), "%.0f mV", bData.cellDelta_mV);
-        uint16_t deltaColor = (bData.cellDelta_mV < 20.0f) ? COLOR_GREEN :
-                              ((bData.cellDelta_mV < 50.0f) ? COLOR_YELLOW : COLOR_ORANGE);
-        drawTextRow(p1X + 258, midY + 39, 112, subBuf, deltaColor, COLOR_DARK_GRAY, 2);
+        if (fabsf(bData.cellDelta_mV - s_last_low_delta) >= 1.0f) {
+            s_last_low_delta = bData.cellDelta_mV;
+            snprintf(subBuf, sizeof(subBuf), "%.0f mV", bData.cellDelta_mV);
+            uint16_t deltaColor = (bData.cellDelta_mV < 20.0f) ? COLOR_GREEN :
+                                  ((bData.cellDelta_mV < 50.0f) ? COLOR_YELLOW : COLOR_ORANGE);
+            drawTextRow(p1X + 258, midY + 39, 112, subBuf, deltaColor, COLOR_DARK_GRAY, 2);
+        }
 
-        // Graphical Spread Gauge Fill (3.00V to 3.65V)
+        // Graphical Spread Gauge Fill (3.00V to 3.65V) - only update if bar coordinates change
         int gaugeX = p1X + 10;
         int gaugeY = midY + 66;
         int gaugeW = 368;
         int gaugeH = 8;
-        fillRect(gaugeX + 1, gaugeY + 1, gaugeW - 2, gaugeH - 2, COLOR_DARK_GRAY);
-
         float minV = bData.minCellVoltage_V > 2.8f ? bData.minCellVoltage_V : 3.0f;
         float maxV = bData.maxCellVoltage_V > 2.8f ? bData.maxCellVoltage_V : 3.0f;
         int minPx = gaugeX + (int)(((minV - 3.0f) / 0.65f) * gaugeW);
@@ -1085,76 +1299,125 @@ void UIManager::updateDynamicDashboard(const BatteryData& bData, const ScannerOv
         if (minPx < gaugeX + 2) minPx = gaugeX + 2;
         if (maxPx > gaugeX + gaugeW - 4) maxPx = gaugeX + gaugeW - 4;
         if (maxPx < minPx + 4) maxPx = minPx + 4;
-        fillRect(minPx, gaugeY + 1, maxPx - minPx, gaugeH - 2, COLOR_CYAN);
-        // Needles stay strictly inside gauge interior to prevent un-erased streaks
-        fillRect(minPx - 1, gaugeY + 1, 3, gaugeH - 2, COLOR_YELLOW);
-        fillRect(maxPx - 1, gaugeY + 1, 3, gaugeH - 2, COLOR_GREEN);
 
-        // Compact details in-place
-        snprintf(subBuf, sizeof(subBuf), "Celle Temp  :  Min %.1f C  /  Max %.1f C",
-                 bData.minCellTemp_C, bData.maxCellTemp_C);
-        drawTextRow(p1X + 10, midY + 88, p1W - 20, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+        if (minPx != s_last_gauge_min_px || maxPx != s_last_gauge_max_px) {
+            s_last_gauge_min_px = minPx;
+            s_last_gauge_max_px = maxPx;
+            fillRect(gaugeX + 1, gaugeY + 1, gaugeW - 2, gaugeH - 2, COLOR_DARK_GRAY);
+            fillRect(minPx, gaugeY + 1, maxPx - minPx, gaugeH - 2, COLOR_CYAN);
+            fillRect(minPx - 1, gaugeY + 1, 3, gaugeH - 2, COLOR_YELLOW);
+            fillRect(maxPx - 1, gaugeY + 1, 3, gaugeH - 2, COLOR_GREEN);
+        }
 
-        snprintf(subBuf, sizeof(subBuf), "BMS Temp/SOH:  %.1f C   (Sundhed: %u%% SOH)",
-                 bData.temperature_C, bData.soh_percent);
-        drawTextRow(p1X + 10, midY + 104, p1W - 20, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+        if (bData.minCellTemp_C != s_last_min_temp || bData.maxCellTemp_C != s_last_max_temp) {
+            s_last_min_temp = bData.minCellTemp_C;
+            s_last_max_temp = bData.maxCellTemp_C;
+            snprintf(subBuf, sizeof(subBuf), "Celle Temp  :  Min %.1f C  /  Max %.1f C",
+                     bData.minCellTemp_C, bData.maxCellTemp_C);
+            drawTextRow(p1X + 10, midY + 88, p1W - 20, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+        }
+
+        if (bData.temperature_C != s_last_bms_temp || bData.soh_percent != s_last_bms_soh) {
+            s_last_bms_temp = bData.temperature_C;
+            s_last_bms_soh = bData.soh_percent;
+            snprintf(subBuf, sizeof(subBuf), "BMS Temp/SOH:  %.1f C   (Sundhed: %u%% SOH)",
+                     bData.temperature_C, bData.soh_percent);
+            drawTextRow(p1X + 10, midY + 104, p1W - 20, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+        }
 
         float estKwh = (bData.totalCapacity_Ah * bData.voltage_V * (bData.soc_percent / 100.0f)) / 1000.0f;
-        snprintf(subBuf, sizeof(subBuf), "Est. Energi :  ~%.1f kWh af 25.6 kWh", estKwh);
-        drawTextRow(p1X + 10, midY + 120, p1W - 20, subBuf, COLOR_GREEN, COLOR_CARD_BG, 1);
+        if (fabsf(estKwh - s_last_low_kwh) >= 0.1f) {
+            s_last_low_kwh = estKwh;
+            snprintf(subBuf, sizeof(subBuf), "Est. Energi :  ~%.1f kWh af 25.6 kWh", estKwh);
+            drawTextRow(p1X + 10, midY + 120, p1W - 20, subBuf, COLOR_GREEN, COLOR_CARD_BG, 1);
+        }
 
         // --- RIGHT PANEL DYNAMIC UPDATES ---
-        // Operational Switches Badges side-by-side at midY + 26 = 300, H = 22
-        if (bData.chargeAllowed) {
-            fillRect(p2X + 8, midY + 26, 116, 22, COLOR_DARK_GREEN);
-            drawRect(p2X + 8, midY + 26, 116, 22, COLOR_GREEN);
-            drawString(p2X + 16, midY + 32, "LAD: TILLADT", COLOR_WHITE, COLOR_DARK_GREEN, 1);
-        } else {
-            fillRect(p2X + 8, midY + 26, 116, 22, COLOR_RED);
-            drawRect(p2X + 8, midY + 26, 116, 22, COLOR_WHITE);
-            drawString(p2X + 16, midY + 32, "LAD: STOPPET", COLOR_WHITE, COLOR_RED, 1);
+        int8_t cur_chg = bData.chargeAllowed ? 1 : 0;
+        if (cur_chg != s_last_chg_allowed) {
+            s_last_chg_allowed = cur_chg;
+            if (cur_chg) {
+                fillRect(p2X + 8, midY + 26, 116, 22, COLOR_DARK_GREEN);
+                drawRect(p2X + 8, midY + 26, 116, 22, COLOR_GREEN);
+                drawString(p2X + 16, midY + 32, "LAD: TILLADT", COLOR_WHITE, COLOR_DARK_GREEN, 1);
+            } else {
+                fillRect(p2X + 8, midY + 26, 116, 22, COLOR_RED);
+                drawRect(p2X + 8, midY + 26, 116, 22, COLOR_WHITE);
+                drawString(p2X + 16, midY + 32, "LAD: STOPPET", COLOR_WHITE, COLOR_RED, 1);
+            }
         }
 
-        if (bData.dischargeAllowed) {
-            fillRect(p2X + 130, midY + 26, 116, 22, COLOR_DARK_GREEN);
-            drawRect(p2X + 130, midY + 26, 116, 22, COLOR_GREEN);
-            drawString(p2X + 134, midY + 32, "AFLAD: TILLADT", COLOR_WHITE, COLOR_DARK_GREEN, 1);
-        } else {
-            fillRect(p2X + 130, midY + 26, 116, 22, COLOR_RED);
-            drawRect(p2X + 130, midY + 26, 116, 22, COLOR_WHITE);
-            drawString(p2X + 134, midY + 32, "AFLAD: STOPPET", COLOR_WHITE, COLOR_RED, 1);
+        int8_t cur_dchg = bData.dischargeAllowed ? 1 : 0;
+        if (cur_dchg != s_last_dchg_allowed) {
+            s_last_dchg_allowed = cur_dchg;
+            if (cur_dchg) {
+                fillRect(p2X + 130, midY + 26, 116, 22, COLOR_DARK_GREEN);
+                drawRect(p2X + 130, midY + 26, 116, 22, COLOR_GREEN);
+                drawString(p2X + 134, midY + 32, "AFLAD: TILLADT", COLOR_WHITE, COLOR_DARK_GREEN, 1);
+            } else {
+                fillRect(p2X + 130, midY + 26, 116, 22, COLOR_RED);
+                drawRect(p2X + 130, midY + 26, 116, 22, COLOR_WHITE);
+                drawString(p2X + 134, midY + 32, "AFLAD: STOPPET", COLOR_WHITE, COLOR_RED, 1);
+            }
         }
 
-        if (!bData.protectionActive && !bData.warningActive) {
-            fillRect(p2X + 252, midY + 26, 126, 22, COLOR_DARK_GREEN);
-            drawRect(p2X + 252, midY + 26, 126, 22, COLOR_GREEN);
-            drawString(p2X + 260, midY + 32, "ALARM: NORMAL", COLOR_WHITE, COLOR_DARK_GREEN, 1);
-        } else {
-            fillRect(p2X + 252, midY + 26, 126, 22, COLOR_RED);
-            drawRect(p2X + 252, midY + 26, 126, 22, COLOR_WHITE);
-            drawString(p2X + 260, midY + 32, "ALARM: AKTIV", COLOR_WHITE, COLOR_RED, 1);
+        int8_t cur_alarm = (!bData.protectionActive && !bData.warningActive) ? 0 : 1;
+        if (cur_alarm != s_last_alarm_state) {
+            s_last_alarm_state = cur_alarm;
+            if (cur_alarm == 0) {
+                fillRect(p2X + 252, midY + 26, 126, 22, COLOR_DARK_GREEN);
+                drawRect(p2X + 252, midY + 26, 126, 22, COLOR_GREEN);
+                drawString(p2X + 260, midY + 32, "ALARM: NORMAL", COLOR_WHITE, COLOR_DARK_GREEN, 1);
+            } else {
+                fillRect(p2X + 252, midY + 26, 126, 22, COLOR_RED);
+                drawRect(p2X + 252, midY + 26, 126, 22, COLOR_WHITE);
+                drawString(p2X + 260, midY + 32, "ALARM: AKTIV", COLOR_WHITE, COLOR_RED, 1);
+            }
         }
 
-        snprintf(subBuf, sizeof(subBuf), "Ladespænding  :  %.2f V   (Cut-off: %.2f V)",
-                 bData.chargeVoltageLimit_V,
-                 bData.dischargeCutoffVoltage_V > 0 ? bData.dischargeCutoffVoltage_V : 44.8f);
-        drawTextRow(p2X + 10, midY + 54, p2W - 20, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+        if (bData.chargeVoltageLimit_V != s_last_chg_v_lim) {
+            s_last_chg_v_lim = bData.chargeVoltageLimit_V;
+            snprintf(subBuf, sizeof(subBuf), "Ladespænding  :  %.2f V   (Cut-off: %.2f V)",
+                     bData.chargeVoltageLimit_V,
+                     bData.dischargeCutoffVoltage_V > 0 ? bData.dischargeCutoffVoltage_V : 44.8f);
+            drawTextRow(p2X + 10, midY + 54, p2W - 20, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+        }
 
-        snprintf(subBuf, sizeof(subBuf), "Maks Ladestrøm:  %.1f A   (~%.0f kW)",
-                 bData.chargeCurrentLimit_A, (bData.chargeCurrentLimit_A * 54.0f) / 1000.0f);
-        drawTextRow(p2X + 10, midY + 70, p2W - 20, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+        if (bData.chargeCurrentLimit_A != s_last_chg_a_lim) {
+            s_last_chg_a_lim = bData.chargeCurrentLimit_A;
+            snprintf(subBuf, sizeof(subBuf), "Maks Ladestrøm:  %.1f A   (~%.0f kW)",
+                     bData.chargeCurrentLimit_A, (bData.chargeCurrentLimit_A * 54.0f) / 1000.0f);
+            drawTextRow(p2X + 10, midY + 70, p2W - 20, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+        }
 
-        snprintf(subBuf, sizeof(subBuf), "Maks Afladning:  %.1f A   (~%.0f kW)",
-                 bData.dischargeCurrentLimit_A, (bData.dischargeCurrentLimit_A * 51.0f) / 1000.0f);
-        drawTextRow(p2X + 10, midY + 86, p2W - 20, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+        if (bData.dischargeCurrentLimit_A != s_last_dchg_a_lim) {
+            s_last_dchg_a_lim = bData.dischargeCurrentLimit_A;
+            snprintf(subBuf, sizeof(subBuf), "Maks Afladning:  %.1f A   (~%.0f kW)",
+                     bData.dischargeCurrentLimit_A, (bData.dischargeCurrentLimit_A * 51.0f) / 1000.0f);
+            drawTextRow(p2X + 10, midY + 86, p2W - 20, subBuf, COLOR_WHITE, COLOR_CARD_BG, 1);
+        }
 
-        snprintf(subBuf, sizeof(subBuf), "Rosen (Master):  %u%% SOC | %+.1f A | %+.2f kW",
-                 bData.pack1_soc_percent, bData.pack1_current_A, bData.pack1_power_W / 1000.0f);
-        drawTextRow(p2X + 10, midY + 104, p2W - 20, subBuf, COLOR_CYAN, COLOR_CARD_BG, 1);
+        if (bData.pack1_soc_percent != s_last_r_p1_soc ||
+            fabsf(bData.pack1_current_A - s_last_r_p1_i) >= 0.2f ||
+            fabsf(bData.pack1_power_W - s_last_r_p1_w) >= 20.0f) {
+            s_last_r_p1_soc = bData.pack1_soc_percent;
+            s_last_r_p1_i = bData.pack1_current_A;
+            s_last_r_p1_w = bData.pack1_power_W;
+            snprintf(subBuf, sizeof(subBuf), "Rosen (Master):  %u%% SOC | %+.1f A | %+.2f kW",
+                     bData.pack1_soc_percent, bData.pack1_current_A, bData.pack1_power_W / 1000.0f);
+            drawTextRow(p2X + 10, midY + 104, p2W - 20, subBuf, COLOR_CYAN, COLOR_CARD_BG, 1);
+        }
 
-        snprintf(subBuf, sizeof(subBuf), "RPT   (Slave) :  %u%% SOC | %+.1f A | %+.2f kW",
-                 bData.pack2_soc_percent, bData.pack2_current_A, bData.pack2_power_W / 1000.0f);
-        drawTextRow(p2X + 10, midY + 120, p2W - 20, subBuf, COLOR_GREEN, COLOR_CARD_BG, 1);
+        if (bData.pack2_soc_percent != s_last_r_p2_soc ||
+            fabsf(bData.pack2_current_A - s_last_r_p2_i) >= 0.2f ||
+            fabsf(bData.pack2_power_W - s_last_r_p2_w) >= 20.0f) {
+            s_last_r_p2_soc = bData.pack2_soc_percent;
+            s_last_r_p2_i = bData.pack2_current_A;
+            s_last_r_p2_w = bData.pack2_power_W;
+            snprintf(subBuf, sizeof(subBuf), "RPT   (Slave) :  %u%% SOC | %+.1f A | %+.2f kW",
+                     bData.pack2_soc_percent, bData.pack2_current_A, bData.pack2_power_W / 1000.0f);
+            drawTextRow(p2X + 10, midY + 120, p2W - 20, subBuf, COLOR_GREEN, COLOR_CARD_BG, 1);
+        }
     }
 }
 
@@ -1849,11 +2112,8 @@ void UIManager::updateDisplay() {
         updateDynamicScanner(overview, bData);
     }
 
-    // Update display: if using direct scanout framebuffer, flush CPU dirty cache lines to PSRAM.
-    // GDMA continuously streams directly from this PSRAM buffer, completely eliminating 768KB memcpy bus contention!
-    if (_is_direct_fb) {
-        Cache_WriteBack_All();
-    } else {
+    // Update display: if fallback framebuffer was allocated, blit to RGB panel
+    if (!_is_direct_fb) {
         esp_lcd_panel_draw_bitmap(_panel_handle, 0, 0, LCD_WIDTH, LCD_HEIGHT, _framebuffer);
     }
 }
