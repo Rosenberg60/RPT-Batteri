@@ -2,8 +2,8 @@
 
 // =============================================================================
 // PROJEKT : RPT-Batterimonitor med Waveshare ESP32-S3-Touch-LCD-7 (Rev 1.2)
-// VERSION : v1.5.1 (16MHz PCLK, Proven ST7262 Timings, Zero-Flicker & Stability)
-// DATO/TID: 2026-09-06 11:40:00
+// VERSION : v1.5.2 (Restored Page 1 IP Display, Full Redraw Cache Invalidation)
+// DATO/TID: 2026-09-06 11:45:00
 // =============================================================================
 
 #include <Arduino.h>

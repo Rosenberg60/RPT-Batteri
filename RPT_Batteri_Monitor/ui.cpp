@@ -774,12 +774,12 @@ void UIManager::updateDynamicDashboard(const BatteryData& bData, const ScannerOv
     }
 
     // State tracking variables to completely eliminate flicker on Page 1
-    static bool s_last_wifi_connected = false;
-    static String s_last_ip = "";
+    static int8_t s_last_wifi_connected = -1;
+    static String s_last_ip = "___UNSET___";
     static uint32_t s_last_upSec = 0xFFFFFFFF;
     static uint8_t s_last_lipo_soc = 0xFF;
     static float s_last_lipo_v = -1.0f;
-    static bool s_last_lipo_conn = false;
+    static int8_t s_last_lipo_conn = -1;
     static uint32_t s_last_rx_update = 0xFFFFFFFF;
     static int s_last_badge_state = -1;
 
@@ -845,9 +845,12 @@ void UIManager::updateDynamicDashboard(const BatteryData& bData, const ScannerOv
     // If a full redraw was requested, invalidate all caches
     if (s_dash_needs_full_redraw) {
         s_dash_needs_full_redraw = false;
+        s_last_wifi_connected = -1;
+        s_last_ip = "___UNSET___";
         s_last_upSec = 0xFFFFFFFF;
         s_last_lipo_soc = 0xFF;
         s_last_lipo_v = -1.0f;
+        s_last_lipo_conn = -1;
         s_last_rx_update = 0xFFFFFFFF;
         s_last_badge_state = -1;
         s_last_c0_soc = 0xFF;
@@ -902,16 +905,18 @@ void UIManager::updateDynamicDashboard(const BatteryData& bData, const ScannerOv
 
     // 1. Header Bar Updates (in-place text updates without wiping whole navy header)
     bool cur_wifi = BatteryWebServer::getInstance().isConnected();
-    String cur_ip = cur_wifi ? BatteryWebServer::getInstance().getIpAddress() : "";
-    if (cur_wifi != s_last_wifi_connected || cur_ip != s_last_ip) {
-        s_last_wifi_connected = cur_wifi;
+    String cur_ip = BatteryWebServer::getInstance().getIpAddress();
+    int8_t cur_wifi_state = cur_wifi ? 1 : 0;
+    if (cur_wifi_state != s_last_wifi_connected || cur_ip != s_last_ip) {
+        s_last_wifi_connected = cur_wifi_state;
         s_last_ip = cur_ip;
         char wifiBuf[48];
         if (cur_wifi) {
             snprintf(wifiBuf, sizeof(wifiBuf), "IP: %s", cur_ip.c_str());
             drawTextRow(325, 8, 140, wifiBuf, COLOR_GREEN, COLOR_NAVY, 1);
         } else {
-            drawTextRow(325, 8, 140, "WiFi: Standby", COLOR_YELLOW, COLOR_NAVY, 1);
+            snprintf(wifiBuf, sizeof(wifiBuf), "WiFi: %s", cur_ip.c_str());
+            drawTextRow(325, 8, 140, wifiBuf, COLOR_YELLOW, COLOR_NAVY, 1);
         }
     }
 
@@ -924,10 +929,11 @@ void UIManager::updateDynamicDashboard(const BatteryData& bData, const ScannerOv
     }
 
     // LiPo Battery Status (Option A via TP1 & GPIO 6)
-    if (bData.lipo_connected != s_last_lipo_conn ||
+    int8_t cur_lipo_conn = bData.lipo_connected ? 1 : 0;
+    if (cur_lipo_conn != s_last_lipo_conn ||
         bData.lipo_soc_percent != s_last_lipo_soc ||
         fabsf(bData.lipo_voltage_V - s_last_lipo_v) >= 0.08f) {
-        s_last_lipo_conn = bData.lipo_connected;
+        s_last_lipo_conn = cur_lipo_conn;
         s_last_lipo_soc = bData.lipo_soc_percent;
         s_last_lipo_v = bData.lipo_voltage_V;
         char lipoBuf[32];
@@ -1493,7 +1499,8 @@ void UIManager::updateDynamicCellDiagnostics(const BatteryData& bData, const Sca
         snprintf(wifiBuf, sizeof(wifiBuf), "IP: %s", BatteryWebServer::getInstance().getIpAddress().c_str());
         drawTextRow(450, 8, 160, wifiBuf, COLOR_GREEN, COLOR_NAVY, 1);
     } else {
-        drawTextRow(450, 8, 160, "WiFi: Standby", COLOR_YELLOW, COLOR_NAVY, 1);
+        snprintf(wifiBuf, sizeof(wifiBuf), "WiFi: %s", BatteryWebServer::getInstance().getIpAddress().c_str());
+        drawTextRow(450, 8, 160, wifiBuf, COLOR_YELLOW, COLOR_NAVY, 1);
     }
 
     uint32_t upSec = millis() / 1000;
@@ -1865,7 +1872,8 @@ void UIManager::updateDynamicScanner(const ScannerOverview& overview, const Batt
         snprintf(wifiBuf, sizeof(wifiBuf), "IP: %s", BatteryWebServer::getInstance().getIpAddress().c_str());
         drawTextRow(325, 8, 140, wifiBuf, COLOR_GREEN, COLOR_NAVY, 1);
     } else {
-        drawTextRow(325, 8, 140, "WiFi: Standby", COLOR_YELLOW, COLOR_NAVY, 1);
+        snprintf(wifiBuf, sizeof(wifiBuf), "WiFi: %s", BatteryWebServer::getInstance().getIpAddress().c_str());
+        drawTextRow(325, 8, 140, wifiBuf, COLOR_YELLOW, COLOR_NAVY, 1);
     }
 
     uint32_t upSec = millis() / 1000;
