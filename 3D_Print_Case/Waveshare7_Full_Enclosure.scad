@@ -150,76 +150,75 @@ module battery_18650_holder() {
     }
 }
 
-// Front bezel internal mounting bosses for Mellemstykke
-mid_mount_x = 80.0; // Spacing: X = +/- 80mm
-mid_mount_y = 52.0; // Spacing: Y = +/- 52mm
+// Front bezel internal mounting bosses for Mellemstykke (well away from the 170x100 cutout)
+mid_mount_x = 92.0; // Spacing: X = +/- 92mm
+mid_mount_y = 54.0; // Spacing: Y = +/- 54mm
 
 // =============================================================================
-// 1. FRONT BEZEL (FLUSH SUNKEN DISPLAY + SHELF + BOSSES FOR MELLEMSTYKKE)
+// 1. FRONT BEZEL (FLUSH SUNKEN DISPLAY + 170x100 CUTOUT + SOLID CORNER BOSSES)
 // =============================================================================
 module front_bezel() {
     pw = glass_w + 2 * glass_clearance;
     ph = glass_h + 2 * glass_clearance;
     pr = glass_r + glass_clearance;
 
-    difference() {
-        union() {
+    union() {
+        difference() {
             rounded_box(outer_w, outer_h, front_depth, corner_r);
 
-            // 4x Internal Mounting Bosses for Mellemstykke (Solidly merged with walls)
-            for (sx = [-1, 1]) {
-                for (sy = [-1, 1]) {
-                    translate([sx * mid_mount_x, sy * mid_mount_y, -5.0])
-                        cylinder(d=8.5, h=front_depth + 5.0 - 1.8, $fn=32);
+            // 1. Flush Sunken Glass Pocket (1.8mm deep from front face)
+            translate([0, 0, front_depth - glass_pocket_d])
+                linear_extrude(height=glass_pocket_d + 1)
+                    rounded_rect(pw, ph, pr);
+
+            // 2. LCD Metal Body Pass-Through Cutout: EXACTLY 170mm x 100mm
+            translate([0, 0, -1])
+                linear_extrude(height=front_depth + 2)
+                    rounded_rect(170.0, 100.0, 4.0);
+
+            // 3. Internal cavity hollow (leaves 2.0mm solid front face shelf)
+            translate([0, 0, -0.5])
+                linear_extrude(height=front_depth - 2.0 + 0.5)
+                    rounded_rect(outer_w - 2 * wall, outer_h - 2 * wall, corner_r - wall);
+
+            // 4. Snap-fit female retention grooves (inside top & bottom walls)
+            for (sy = [-1, 1]) {
+                for (sx = [-50, 50]) {
+                    translate([sx, sy * (outer_h / 2 - wall + 0.1), 3.0])
+                        rotate([0, 90, 0])
+                            cylinder(r=0.9, h=16, center=true);
+                }
+            }
+
+            // 5. Pry Slots (2x on bottom and side edges for tool-free disassembly)
+            translate([0, -outer_h/2, 0])
+                cube([14, wall * 2, 2.0], center=true);
+            translate([outer_w/2, 0, 0])
+                cube([wall * 2, 14, 2.0], center=true);
+        }
+
+        // 6. The 4 Solid Mounting Bosses for Mellemstykke:
+        // Firmly rooted in the front wall (from Z = front_depth - 2.0 down to Z = 0)
+        // Positioned safely away from the 170x100mm hole
+        for (sx = [-1, 1]) {
+            for (sy = [-1, 1]) {
+                translate([sx * mid_mount_x, sy * mid_mount_y, 0]) {
+                    difference() {
+                        cylinder(d=9.5, h=front_depth - 2.0, $fn=32);
+                        // M3 pilot hole (depth 5.5mm, does NOT pierce through front)
+                        translate([0, 0, -0.5])
+                            cylinder(d=2.8, h=5.5, $fn=24);
+                    }
                 }
             }
         }
-
-        // 1. Flush Sunken Glass Pocket (1.8mm deep from front face)
-        translate([0, 0, front_depth - glass_pocket_d])
-            linear_extrude(height=glass_pocket_d + 1)
-                rounded_rect(pw, ph, pr);
-
-        // 2. LCD Body Pass-Through Cutout (Leaves 13.6mm side shelf & 5mm top/bottom shelf for glass)
-        translate([0, 0, -6])
-            linear_extrude(height=front_depth + 8)
-                rounded_rect(lcd_body_w, lcd_body_h, 4.0);
-
-        // 3. Internal cavity hollow (where back case male lip slips inside)
-        translate([0, 0, -0.5])
-            linear_extrude(height=front_depth - 1.8)
-                rounded_rect(outer_w - 2 * wall, outer_h - 2 * wall, corner_r - wall);
-
-        // 4. M3 Pilot Screw Holes in the 4 bosses for Mellemstykke
-        for (sx = [-1, 1]) {
-            for (sy = [-1, 1]) {
-                translate([sx * mid_mount_x, sy * mid_mount_y, -5.5])
-                    cylinder(d=2.8, h=10.0, $fn=24);
-            }
-        }
-
-        // 5. Snap-fit female retention grooves (inside top & bottom walls)
-        for (sy = [-1, 1]) {
-            for (sx = [-50, 50]) {
-                translate([sx, sy * (outer_h / 2 - wall + 0.1), 3.0])
-                    rotate([0, 90, 0])
-                        cylinder(r=0.9, h=16, center=true);
-            }
-        }
-
-        // 6. Pry Slots (2x on bottom and side edges for tool-free disassembly)
-        translate([0, -outer_h/2, 0])
-            cube([14, wall * 2, 2.0], center=true);
-        translate([outer_w/2, 0, 0])
-            cube([wall * 2, 14, 2.0], center=true);
     }
 }
 
 // =============================================================================
 // 2. MELLEMSTYKKE (DEDICATED DISPLAY CARRIER & MOUNTING MID-PLATE)
 // Screws to back of display via 4x Waveshare factory M3 standoffs
-// Screws to Front Bezel on inside via 4x outer corner bosses
-// Holds display 100% rigidly flush in front bezel without any screws on front!
+// Screws to Front Bezel on inside via 4x outer corner bosses (X=+/-92, Y=+/-54)
 // =============================================================================
 module mellemstykke() {
     mid_t = 2.5; // Sturdy 2.5mm carrier plate
@@ -227,13 +226,13 @@ module mellemstykke() {
     difference() {
         union() {
             // Main carrier plate
-            rounded_box(178, 116, mid_t, 6.0);
+            rounded_box(196, 118, mid_t, 7.0);
             
             // Stiffening outer perimeter rib
             difference() {
-                rounded_box(178, 116, mid_t + 1.5, 6.0);
+                rounded_box(196, 118, mid_t + 1.5, 7.0);
                 translate([0, 0, -1])
-                    rounded_box(172, 110, mid_t + 3.5, 4.0);
+                    rounded_box(190, 112, mid_t + 3.5, 5.0);
             }
         }
         
@@ -280,7 +279,8 @@ module mellemstykke() {
 }
 
 // =============================================================================
-// 3. BACK CASE (WALL MOUNT + 18650 CRADLE + SUPPORT PADS + SNAP-FIT LIP)
+// 3. BACK CASE (WALL MOUNT + 18650 CRADLE + UNIVERSAL PORTS + SNAP-FIT LIP)
+// Note: The 4 bottom stag have been completely removed as requested!
 // =============================================================================
 module back_case() {
     union() {
@@ -312,7 +312,7 @@ module back_case() {
                 linear_extrude(height=back_depth + lip_height + 2)
                     rounded_rect(outer_w - 2 * wall, outer_h - 2 * wall, corner_r - wall);
 
-            // 2. Wall Mounting: 2x Keyhole slots (144mm horizontal spacing, outside pillars)
+            // 2. Wall Mounting: 2x Keyhole slots (144mm horizontal spacing)
             translate([-72, 22, 0]) keyhole_slot();
             translate([ 72, 22, 0]) keyhole_slot();
 
@@ -342,26 +342,8 @@ module back_case() {
             }
         }
 
-        // 4x Rear Support Pads: Rest against Mellemstykke for zero-flex touch backing
-        pad_h    = 13.8;
-        overlap  = 0.3;
-        standoff_coords = [
-            [ws_standoff_x1, ws_standoff_y1],
-            [ws_standoff_x1, ws_standoff_y2],
-            [ws_standoff_x2, ws_standoff_y1],
-            [ws_standoff_x2, ws_standoff_y2]
-        ];
-        for (pt = standoff_coords) {
-            translate([pt[0], pt[1], wall - overlap]) {
-                difference() {
-                    cylinder(d=8.0, h=pad_h + overlap, $fn=32);
-                    translate([0, 0, -1])
-                        cylinder(d=3.6, h=pad_h + overlap + 2, $fn=24);
-                }
-            }
-        }
-
         // 18650 Battery Snap Cradle cleanly merged into the floor
+        // (Zero bottom stag/pillars - completely clean floor!)
         battery_18650_holder();
     }
 }
