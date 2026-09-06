@@ -197,7 +197,7 @@ footer { text-align: center; font-size: 0.8rem; color: var(--text-muted); margin
   </div>
 
   <footer>
-    RPT & Rosen Batterimonitor v1.5.0 &bull; ESP32-S3 (Rev 1.2) &bull; Deye CAN 500k &bull; Live opdatering aktiv
+    RPT & Rosen Batterimonitor v1.5.1 &bull; ESP32-S3 (Rev 1.2) &bull; Deye CAN 500k &bull; Live opdatering aktiv
   </footer>
 </div>
 
