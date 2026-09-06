@@ -5,16 +5,16 @@
 // Features:
 // 1. Flush Sunken Front Bezel (glass is 100% plant / flush with front face)
 // 2. Snap-Fit tool-free closure with 2x pry-slots for easy disassembly
-// 3. Wall-mount keyhole slots on back (horizontal spacing 120mm)
-// 4. Extra internal depth (25mm internal clearance for CAN, LiPo, DC-DC buck, wires)
-// 5. Ports for 2x USB-C (UART/CDC) and MicroSD slot
+// 3. Integrated 18650 Li-ion / LiPo snap-in battery cradle in bottom of case
+// 4. Port cutouts (2x USB-C + MicroSD TF card) on both right and left sides
+// 5. Wall-mount keyhole slots on back (horizontal spacing 120mm)
 // 6. Rear and bottom cable feedthroughs + cooling ventilation slots
-// 7. 4x M3 mounting standoffs inside front bezel matching Waveshare PCB ears
+// 7. 4x M3 mounting boss posts inside front bezel matching Waveshare factory studs
 // =============================================================================
 
 /* [Render Mode] */
 part = "both"; // [both, front, back]
-exploded_distance = 35;
+exploded_distance = 45;
 
 /* [Display Specifications (Waveshare 7.0" Touch)] */
 glass_w        = 192.96;
@@ -25,19 +25,26 @@ active_w       = 155.0;
 active_h       = 87.0;
 glass_clearance= 0.45;    // Fit clearance per side (0.9mm total W/H)
 
-mount_hole_x_dist = 126.20;
-mount_hole_y_dist = 65.65;
-mount_boss_d      = 6.5;
-mount_hole_d      = 2.8;
+// 4x Factory-bonded M3 mounting studs on Waveshare board (from drawing)
+mount_hole_x_dist = 126.20; // 126.20mm horizontal spacing
+mount_hole_y_dist = 65.65;  // 65.65mm vertical spacing
+mount_boss_d      = 7.0;    // Standoff boss outer diameter
+mount_hole_d      = 3.4;    // Through hole for M3 screw into display's factory M3 brass studs
+
+/* [18650 Battery Cradle Specs] */
+bat_d             = 18.6;   // 18650 cell diameter (+ clearance)
+bat_r             = bat_d / 2;
+bat_len           = 66.5;   // Length clearance for 18650 cell
+bat_y_pos         = -38.0;  // Position in bottom half of back case
 
 /* [Enclosure Dimensions] */
 wall           = 2.4;
 outer_w        = 208.0;
 outer_h        = 126.0;
 corner_r       = 9.5;
-total_depth    = 30.0;
-front_depth    = 7.5;
-back_depth     = total_depth - front_depth; // 22.5mm
+total_depth    = 32.0;    // 32mm total depth (plenty of room for 18650 + CAN wiring)
+front_depth    = 8.0;     // Front bezel rim depth
+back_depth     = total_depth - front_depth; // 24.0mm
 lip_height     = 4.5;
 snap_depth     = 0.75;
 
@@ -75,6 +82,67 @@ module keyhole_slot() {
     }
 }
 
+// 18650 Snap-in Battery Cradle with Central Snap Clamp
+module battery_18650_holder() {
+    cradle_wall = 2.0;
+    snap_w = 24.0;
+    overlap = 0.3; // Overlap with floor ensures clean 2-manifold union
+
+    translate([0, bat_y_pos, wall - overlap]) {
+        // 1. Central Snap Clamp with flexible C-arms
+        difference() {
+            translate([-snap_w/2, -(bat_r + cradle_wall), 0])
+                cube([snap_w, (bat_r + cradle_wall)*2, bat_r + 4.5 + overlap]);
+
+            // Cylindrical battery bed
+            translate([-snap_w/2 - 1, 0, bat_r + overlap])
+                rotate([0, 90, 0])
+                    cylinder(r=bat_r, h=snap_w + 2, $fn=64);
+
+            // Top snap entry throat (16.6mm wide, flexes open over 18.6mm cell)
+            translate([-snap_w/2 - 1, -8.3, bat_r + overlap + 1.8])
+                cube([snap_w + 2, 16.6, 12]);
+
+            // 45-degree lead-in ramps on top lip for smooth press-fit insertion
+            translate([-snap_w/2 - 1, -8.3, bat_r + overlap + 4.5])
+                rotate([45, 0, 0])
+                    cube([snap_w + 2, 6, 6]);
+            translate([-snap_w/2 - 1, 8.3, bat_r + overlap + 4.5])
+                rotate([-45, 0, 0])
+                    cube([snap_w + 2, 6, 6]);
+        }
+
+        // 2. End-stop walls with wire pass-through notches
+        for (sx = [-1, 1]) {
+            translate([sx * (bat_len/2 + 1.0), 0, 0]) {
+                difference() {
+                    translate([-1.0, -(bat_r + 1.5), 0])
+                        cube([2.0, (bat_r + 1.5)*2, bat_r + 2.0 + overlap]);
+                    // Wire pass-through notch at center for battery leads
+                    translate([-2.0, -3.0, overlap])
+                        cube([4.0, 6.0, bat_r + 3.0]);
+                }
+            }
+        }
+
+        // 3. Side cradle support saddles near both ends
+        for (sx = [-22, 22]) {
+            translate([sx - 4, 0, 0]) {
+                difference() {
+                    translate([0, -(bat_r + cradle_wall), 0])
+                        cube([8, (bat_r + cradle_wall)*2, bat_r + overlap]);
+                    translate([-1, 0, bat_r + overlap])
+                        rotate([0, 90, 0])
+                            cylinder(r=bat_r, h=10, $fn=64);
+                }
+            }
+        }
+    }
+}
+
+// =============================================================================
+// 1. FRONT BEZEL (FLUSH SUNKEN DISPLAY + INTERNAL M3 FASTENING + SNAP-FIT)
+// =============================================================================
 module front_bezel() {
     pw = glass_w + 2 * glass_clearance;
     ph = glass_h + 2 * glass_clearance;
@@ -83,40 +151,42 @@ module front_bezel() {
     difference() {
         union() {
             rounded_box(outer_w, outer_h, front_depth, corner_r);
+
+            // 4x Internal M3 fastening boss posts matching Waveshare board's factory brass studs
             for (sx = [-1, 1]) {
                 for (sy = [-1, 1]) {
                     translate([sx * mount_hole_x_dist / 2, sy * mount_hole_y_dist / 2, 0]) {
-                        cylinder(d=mount_boss_d, h=front_depth + 3.0);
+                        cylinder(d=mount_boss_d, h=front_depth + 2.5);
                     }
                 }
             }
         }
 
-        // 1. Flush Sunken Glass Pocket
+        // 1. Flush Sunken Glass Pocket (Drops 2.0mm from front face)
         translate([0, 0, front_depth - glass_pocket_d])
             linear_extrude(height=glass_pocket_d + 1)
                 rounded_rect(pw, ph, pr);
 
-        // 2. Active Screen Viewing Window
+        // 2. Active Screen Viewing Window (Pierces through the support shelf)
         translate([0, 0, -1])
             linear_extrude(height=front_depth + 2)
                 rounded_rect(active_w, active_h, 3.0);
 
-        // 3. Internal cavity hollow
+        // 3. Internal cavity hollow (where PCB and back case slip inside)
         translate([0, 0, -0.5])
             linear_extrude(height=front_depth - 2.0)
                 rounded_rect(outer_w - 2 * wall, outer_h - 2 * wall, corner_r - wall);
 
-        // 4. M3 Screw Holes in standoffs
+        // 4. M3 Screw Holes in the 4 standoffs (screws insert from inside into Waveshare's brass studs)
         for (sx = [-1, 1]) {
             for (sy = [-1, 1]) {
-                translate([sx * mount_hole_x_dist / 2, sy * mount_hole_y_dist / 2, front_depth - 7.0]) {
-                    cylinder(d=mount_hole_d, h=12);
+                translate([sx * mount_hole_x_dist / 2, sy * mount_hole_y_dist / 2, -1]) {
+                    cylinder(d=mount_hole_d, h=front_depth + 5);
                 }
             }
         }
 
-        // 5. Snap-fit female retention grooves
+        // 5. Snap-fit female retention grooves (inside top & bottom walls)
         for (sy = [-1, 1]) {
             for (sx = [-50, 50]) {
                 translate([sx, sy * (outer_h / 2 - wall + 0.1), 3.0])
@@ -125,7 +195,7 @@ module front_bezel() {
             }
         }
 
-        // 6. Pry Slots
+        // 6. Pry Slots (2x on bottom and side edges for tool-free disassembly)
         translate([0, -outer_h/2, 0])
             cube([14, wall * 2, 2.0], center=true);
         translate([outer_w/2, 0, 0])
@@ -133,63 +203,79 @@ module front_bezel() {
     }
 }
 
+// =============================================================================
+// 2. BACK CASE (WALL MOUNT + 18650 CRADLE + UNIVERSAL PORTS + SNAP-FIT LIP)
+// =============================================================================
 module back_case() {
-    difference() {
-        union() {
-            rounded_box(outer_w, outer_h, back_depth, corner_r);
-            translate([0, 0, back_depth]) {
-                difference() {
-                    linear_extrude(height=lip_height)
-                        rounded_rect(outer_w - 2*wall - 0.3, outer_h - 2*wall - 0.3, corner_r - wall);
-                    translate([0, 0, -1])
-                        linear_extrude(height=lip_height + 2)
-                            rounded_rect(outer_w - 4*wall, outer_h - 4*wall, corner_r - 2*wall);
-                }
-                for (sy = [-1, 1]) {
-                    for (sx = [-50, 50]) {
-                        translate([sx, sy * ((outer_h - 2*wall - 0.3)/2), lip_height - 1.4])
-                            rotate([0, 90, 0])
-                                cylinder(r=0.75, h=14, center=true);
+    union() {
+        difference() {
+            union() {
+                rounded_box(outer_w, outer_h, back_depth, corner_r);
+
+                // Snap-fit male mating lip (slides inside front bezel)
+                translate([0, 0, back_depth]) {
+                    difference() {
+                        linear_extrude(height=lip_height)
+                            rounded_rect(outer_w - 2*wall - 0.3, outer_h - 2*wall - 0.3, corner_r - wall);
+                        translate([0, 0, -1])
+                            linear_extrude(height=lip_height + 2)
+                                rounded_rect(outer_w - 4*wall, outer_h - 4*wall, corner_r - 2*wall);
+                    }
+                    for (sy = [-1, 1]) {
+                        for (sx = [-50, 50]) {
+                            translate([sx, sy * ((outer_h - 2*wall - 0.3)/2), lip_height - 1.4])
+                                rotate([0, 90, 0])
+                                    cylinder(r=0.75, h=14, center=true);
+                        }
                     }
                 }
             }
-        }
 
-        // Internal volume
-        translate([0, 0, wall])
-            linear_extrude(height=back_depth + lip_height + 2)
-                rounded_rect(outer_w - 2 * wall, outer_h - 2 * wall, corner_r - wall);
+            // 1. Main hollow internal volume
+            translate([0, 0, wall])
+                linear_extrude(height=back_depth + lip_height + 2)
+                    rounded_rect(outer_w - 2 * wall, outer_h - 2 * wall, corner_r - wall);
 
-        // Keyholes
-        translate([-60, 20, 0]) keyhole_slot();
-        translate([ 60, 20, 0]) keyhole_slot();
+            // 2. Wall Mounting: 2x Keyhole slots (120mm horizontal spacing)
+            translate([-60, 22, 0]) keyhole_slot();
+            translate([ 60, 22, 0]) keyhole_slot();
 
-        // Rear Cable hole
-        translate([0, -18, -1])
-            linear_extrude(height=wall + 2)
-                rounded_rect(38, 24, 4.0);
-
-        // Bottom Cable Knockout
-        translate([0, -outer_h/2, wall + 2])
-            cube([20, wall * 3, 10], center=true);
-
-        // Right USB-C Ports
-        translate([outer_w/2, 10, back_depth - 7])
-            cube([wall * 3, 12.5, 7.5], center=true);
-        translate([outer_w/2, -10, back_depth - 7])
-            cube([wall * 3, 12.5, 7.5], center=true);
-        translate([outer_w/2, -30, back_depth - 7])
-            cube([wall * 3, 15.0, 4.0], center=true);
-
-        // Cooling Vents
-        for (i = [-4:4]) {
-            translate([i * 6.5, 38, -1])
+            // 3. Central Rear Cable Pass-through (for in-wall wire box / conduit)
+            translate([0, -6, -1])
                 linear_extrude(height=wall + 2)
-                    rounded_rect(2.5, 20, 1.25);
+                    rounded_rect(38, 22, 4.0);
+
+            // 4. Bottom Surface Raceway Cable Knockout (for CAN & external power)
+            translate([0, -outer_h/2, wall + 2])
+                cube([22, wall * 3, 10], center=true);
+
+            // 5. Port Cutouts (2x USB-C + MicroSD card slot)
+            // Cutouts placed on BOTH left (-X) and right (+X) side for universal access!
+            for (sx = [-1, 1]) {
+                translate([sx * outer_w/2, 12, back_depth - 7])
+                    cube([wall * 3, 13.0, 8.0], center=true);
+                translate([sx * outer_w/2, -8, back_depth - 7])
+                    cube([wall * 3, 13.0, 8.0], center=true);
+                translate([sx * outer_w/2, -28, back_depth - 7])
+                    cube([wall * 3, 15.5, 4.5], center=true);
+            }
+
+            // 6. Passive Cooling Ventilation Slots (over ESP32-S3 CPU & DC-DC areas)
+            for (i = [-5:5]) {
+                translate([i * 6.5, 42, -1])
+                    linear_extrude(height=wall + 2)
+                        rounded_rect(2.5, 18, 1.25);
+            }
         }
+
+        // Add 18650 Battery Snap Cradle cleanly merged into the floor
+        battery_18650_holder();
     }
 }
 
+// =============================================================================
+// EXECUTION / RENDER SELECTOR
+// =============================================================================
 if (part == "front") {
     translate([0, 0, front_depth])
         rotate([180, 0, 0])
