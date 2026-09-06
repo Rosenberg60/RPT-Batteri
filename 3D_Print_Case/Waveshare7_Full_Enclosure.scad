@@ -49,7 +49,7 @@ bat_y_pos         = -38.0;  // Position in bottom half of back case
 
 /* [Enclosure Dimensions] */
 wall           = 2.4;
-outer_w        = 208.0;
+outer_w        = 228.0;   // 228mm (+20mm wider for plenty of internal USB plug room)
 outer_h        = 126.0;
 corner_r       = 9.5;
 total_depth    = 32.0;    // 32mm total depth (plenty of room for 18650 + CAN wiring)
@@ -151,40 +151,49 @@ module battery_18650_holder() {
 }
 
 // Front bezel internal mounting bosses for Mellemstykke (well away from the 170x100 cutout)
-mid_mount_x = 92.0; // Spacing: X = +/- 92mm
+mid_mount_x = 98.0; // Spacing: X = +/- 98mm (in the wide 228mm enclosure)
 mid_mount_y = 54.0; // Spacing: Y = +/- 54mm
 
 // =============================================================================
-// 1. FRONT BEZEL (FLUSH SUNKEN DISPLAY + 170x100 CUTOUT + SOLID CORNER BOSSES)
+// 1. FRONT BEZEL (FLUSH SUNKEN DISPLAY + SOLID SHELF + 170x100 CUTOUT + BOSSES)
 // =============================================================================
 module front_bezel() {
-    pw = glass_w + 2 * glass_clearance;
-    ph = glass_h + 2 * glass_clearance;
+    pw = glass_w + 2 * glass_clearance; // 193.86mm
+    ph = glass_h + 2 * glass_clearance; // 111.66mm
     pr = glass_r + glass_clearance;
+
+    // Shelf geometry:
+    // Front face is at Z = front_depth (8.0mm)
+    // Glass pocket drops by 1.8mm -> shelf floor is at Z = 6.2mm
+    // Shelf is 2.5mm thick -> internal cavity stops at Z = 3.7mm
+    // Bosses extend from Z = 3.7mm down to Z = 0 (height = 3.7mm)
+    shelf_floor_z   = front_depth - glass_pocket_d; // 6.2mm
+    shelf_thickness = 2.5;                           // 2.5mm thick solid continuous ledge!
+    cavity_ceil_z   = shelf_floor_z - shelf_thickness; // 3.7mm
 
     union() {
         difference() {
             rounded_box(outer_w, outer_h, front_depth, corner_r);
 
-            // 1. Flush Sunken Glass Pocket (1.8mm deep from front face)
-            translate([0, 0, front_depth - glass_pocket_d])
+            // 1. Flush Sunken Glass Pocket (1.8mm deep from front face, down to Z = 6.2mm)
+            translate([0, 0, shelf_floor_z])
                 linear_extrude(height=glass_pocket_d + 1)
                     rounded_rect(pw, ph, pr);
 
-            // 2. LCD Metal Body Pass-Through Cutout: EXACTLY 170mm x 100mm
+            // 2. LCD Metal Body Pass-Through Cutout: EXACTLY 170mm x 100mm (Through the shelf)
             translate([0, 0, -1])
                 linear_extrude(height=front_depth + 2)
                     rounded_rect(170.0, 100.0, 4.0);
 
-            // 3. Internal cavity hollow (leaves 2.0mm solid front face shelf)
+            // 3. Internal cavity hollow (STOPS at Z = 3.7mm to GUARANTEE 2.5mm solid shelf!)
             translate([0, 0, -0.5])
-                linear_extrude(height=front_depth - 2.0 + 0.5)
+                linear_extrude(height=cavity_ceil_z + 0.5)
                     rounded_rect(outer_w - 2 * wall, outer_h - 2 * wall, corner_r - wall);
 
             // 4. Snap-fit female retention grooves (inside top & bottom walls)
             for (sy = [-1, 1]) {
                 for (sx = [-50, 50]) {
-                    translate([sx, sy * (outer_h / 2 - wall + 0.1), 3.0])
+                    translate([sx, sy * (outer_h / 2 - wall + 0.1), 2.5])
                         rotate([0, 90, 0])
                             cylinder(r=0.9, h=16, center=true);
                 }
@@ -198,16 +207,16 @@ module front_bezel() {
         }
 
         // 6. The 4 Solid Mounting Bosses for Mellemstykke:
-        // Firmly rooted in the front wall (from Z = front_depth - 2.0 down to Z = 0)
+        // Grown DIRECTLY from the 2.5mm solid shelf (from Z = 3.7 down to Z = 0)
         // Positioned safely away from the 170x100mm hole
         for (sx = [-1, 1]) {
             for (sy = [-1, 1]) {
                 translate([sx * mid_mount_x, sy * mid_mount_y, 0]) {
                     difference() {
-                        cylinder(d=9.5, h=front_depth - 2.0, $fn=32);
-                        // M3 pilot hole (depth 5.5mm, does NOT pierce through front)
+                        cylinder(d=10.0, h=cavity_ceil_z, $fn=32);
+                        // M3 pilot hole (depth 4.5mm from Z=0, does NOT pierce through front)
                         translate([0, 0, -0.5])
-                            cylinder(d=2.8, h=5.5, $fn=24);
+                            cylinder(d=2.8, h=5.0, $fn=24);
                     }
                 }
             }
@@ -218,21 +227,21 @@ module front_bezel() {
 // =============================================================================
 // 2. MELLEMSTYKKE (DEDICATED DISPLAY CARRIER & MOUNTING MID-PLATE)
 // Screws to back of display via 4x Waveshare factory M3 standoffs
-// Screws to Front Bezel on inside via 4x outer corner bosses (X=+/-92, Y=+/-54)
+// Screws to Front Bezel on inside via 4x outer corner bosses (X=+/-98, Y=+/-54)
 // =============================================================================
 module mellemstykke() {
     mid_t = 2.5; // Sturdy 2.5mm carrier plate
     
     difference() {
         union() {
-            // Main carrier plate
-            rounded_box(196, 118, mid_t, 7.0);
+            // Main carrier plate (214 x 118 mm fits inside the 223.2 x 121.2 cavity)
+            rounded_box(214, 118, mid_t, 7.0);
             
             // Stiffening outer perimeter rib
             difference() {
-                rounded_box(196, 118, mid_t + 1.5, 7.0);
+                rounded_box(214, 118, mid_t + 1.5, 7.0);
                 translate([0, 0, -1])
-                    rounded_box(190, 112, mid_t + 3.5, 5.0);
+                    rounded_box(208, 112, mid_t + 3.5, 5.0);
             }
         }
         
@@ -241,9 +250,9 @@ module mellemstykke() {
         translate([-1.5, 1.0, -1])
             rounded_box(114, 76, mid_t + 4, 3.0);
             
-        // 2. Left-side port clearance cutout (between the two left standoffs)
-        translate([-74, 0, -1])
-            cube([28, 46, mid_t + 4], center=true);
+        // 2. Left-side port clearance cutout (wide clearance for USB-C plugs)
+        translate([-82, 0, -1])
+            cube([44, 46, mid_t + 4], center=true);
             
         // 3. Bottom battery clearance cutout (leaves extra room for 18650 wires)
         translate([0, -42, -1])
@@ -280,7 +289,7 @@ module mellemstykke() {
 
 // =============================================================================
 // 3. BACK CASE (WALL MOUNT + 18650 CRADLE + UNIVERSAL PORTS + SNAP-FIT LIP)
-// Note: The 4 bottom stag have been completely removed as requested!
+// 228mm wide with zero bottom stag
 // =============================================================================
 module back_case() {
     union() {
@@ -312,9 +321,9 @@ module back_case() {
                 linear_extrude(height=back_depth + lip_height + 2)
                     rounded_rect(outer_w - 2 * wall, outer_h - 2 * wall, corner_r - wall);
 
-            // 2. Wall Mounting: 2x Keyhole slots (144mm horizontal spacing)
-            translate([-72, 22, 0]) keyhole_slot();
-            translate([ 72, 22, 0]) keyhole_slot();
+            // 2. Wall Mounting: 2x Keyhole slots (160mm horizontal spacing)
+            translate([-80, 22, 0]) keyhole_slot();
+            translate([ 80, 22, 0]) keyhole_slot();
 
             // 3. Central Rear Cable Pass-through (for in-wall wire box / conduit)
             translate([0, -6, -1])
@@ -352,9 +361,7 @@ module back_case() {
 // EXECUTION / RENDER SELECTOR
 // =============================================================================
 if (part == "front") {
-    translate([0, 0, front_depth])
-        rotate([180, 0, 0])
-            front_bezel();
+    front_bezel();
 } else if (part == "back") {
     back_case();
 } else if (part == "mid" || part == "mellemstykke") {
